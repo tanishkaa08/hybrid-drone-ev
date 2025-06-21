@@ -21,6 +21,7 @@ hybrid-drone-ev/
 **Backend:** Node.js, Express.js, Mongoose  
 **Database:** MongoDB  
 **API Integration:** Google Maps, OpenRouteService (planned)
+**ML + Optimizer:** NetworkX, NumPy, GeoPy, CO₂ emission calculator (planned)
 
 ---
 
