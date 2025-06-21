@@ -86,7 +86,7 @@ npm run dev
 | Location  | Command       | Description                   |
 |-----------|----------------|-------------------------------|
 | `frontend` | `npm run dev`  | Starts Vite dev server        |
-| `backend`  | `node run dev`  | Starts Express backend        |
+| `backend`  | `npm run dev`  | Starts Express backend        |
 
 ---
 
