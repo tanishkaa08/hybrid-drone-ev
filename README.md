@@ -100,7 +100,7 @@ npm run dev
 
 ## 📸 Preview (Optional)
 
-Add Figma/Design Preview link:  
+FIGMA LINK:  
 [Figma Design](https://www.figma.com/design/gZnWW6CSJ91qvq0y7tPmSm/Untitled?node-id=0-1&p=f&t=IJUCLQRzIqN4bcZd-0)
 
 ---
