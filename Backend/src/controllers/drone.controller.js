@@ -56,10 +56,47 @@ const toggleDroneAvailablity = asyncHandler(async(req,res) => {
     res.status(200).json(new ApiResponse(200, updatedDrone, "Drone availability toggled successfully."));
 })
 
+const editDrone = asyncHandler(async ( req ,res) => {
+    const {droneId} = req.params;
+    const { battery, payload, available } = req.body;
+
+    if(!droneId) {
+        throw new ApiError(400, "Drone ID is required.");
+    }
+
+    if(!battery && !payload && available === undefined) {
+        throw new ApiError(400, "At least one field (battery, payload, available) must be provided for update.");
+    }
+
+    const drone = await Drone.findOne({ droneId });
+
+    if(!drone) {
+        throw new ApiError(404, "Drone not found.");
+    }
+
+     const updatedDrone = await Drone.findByIdAndUpdate(
+  drone._id,
+  {
+    battery: battery !== undefined ? battery : drone.battery,
+    payload: payload !== undefined ? payload : drone.payload,
+    available: available !== undefined ? available : drone.available
+  },
+  { new: true, runValidators: true }
+);
+
+
+    if(!updatedDrone) {
+        throw new ApiError(500, "Failed to update drone.");
+    }
+    res.status(200).json(new ApiResponse(200, updatedDrone, "Drone updated successfully."));
+ 
+})
+
 
 
 export {
     createDrone,
     getAllDrones,
-    toggleDroneAvailablity
+    toggleDroneAvailablity,
+    editDrone
 }
