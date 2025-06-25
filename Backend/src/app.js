@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 const app=express();
+import droneRoutes from './routes/drone.routes.js';
 
 app.use(cors(
     {
@@ -23,5 +24,6 @@ app.use(express.urlencoded({
 app.use(express.static('public'));
 app.use(cookieParser());
 
+app.use('/api/v1/drones', droneRoutes);
 
 export default app;
