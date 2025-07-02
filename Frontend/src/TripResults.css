@@ -1,0 +1,79 @@
+.path-planning-page {
+    display: flex;
+    padding: 30px;
+    gap: 40px;
+  }
+  
+  .left-panel {
+    flex: 2;
+  }
+  
+  .right-panel {
+    flex: 1;
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 12px;
+  }
+  
+  .search-input,
+  .location-input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 15px;
+  }
+  
+  .map-section {
+    background: #e0e0e0;
+    padding: 15px;
+    border-radius: 12px;
+  }
+  
+  .map-display {
+    height: 250px;
+    background: #b0bec5;
+    margin-top: 15px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+  }
+  
+  .delivery-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+  }
+  
+  .carbon-box {
+    background: #e3f2fd;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+    margin: 20px 0;
+  }
+  
+  .button-group {
+    display: flex;
+    gap: 10px;
+  }
+  
+  .execute-btn {
+    background: #1976d2;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  
+  .edit-btn {
+    background: #f1f1f1;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  
