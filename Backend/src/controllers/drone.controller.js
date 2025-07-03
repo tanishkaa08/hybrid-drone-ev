@@ -1,12 +1,12 @@
-import { Drone } from "../models/drone.models";
-import ApiError from "../utils/ApiError";
-import { ApiResponse } from "../utils/ApiResponse";
-import asyncHandler from "../utils/AsyncHandler";
+import { Drone } from "../models/drone.models.js";
+import ApiError from "../utils/ApiError.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
+import asyncHandler from "../utils/AsyncHandler.js";
 
 const createDrone = asyncHandler(async ( req ,res) => {
-    const { droneId, battery, payload,available } = req.body;
-    if(!droneId || !battery || !payload) {
-        throw new ApiError(400, "Drone ID, battery, and payload are required.");
+    const {droneId,currentBattery, batteryCapacity, payload, available} = req.body;
+    if(!droneId || !currentBattery || !payload || !batteryCapacity) {
+        throw new ApiError(400, "Drone ID, totalBattery,batteryCapacity and payload are required.");
     }
 
     const existingDrone = await Drone.findOne({droneId: droneId});
@@ -15,7 +15,8 @@ const createDrone = asyncHandler(async ( req ,res) => {
     }
     const drone = await Drone.create({
         droneId,
-        battery,
+        currentBattery,
+        batteryCapacity,
         payload,
         available: available !== undefined ? available : true
     });
@@ -47,7 +48,7 @@ const toggleDroneAvailablity = asyncHandler(async(req,res) => {
     }
 
     drone.available = !drone.available;
-    const updatedDrone = await drone.save(ValidateBeforeSave = false);
+    const updatedDrone = await drone.save({validateBeforeSave:false});
 
     if(!updatedDrone) {
         throw new ApiError(500, "Failed to update drone availability.");
@@ -92,11 +93,24 @@ const editDrone = asyncHandler(async ( req ,res) => {
  
 })
 
+const deleteDrone = asyncHandler(async (req, res) => {
+  const { droneId } = req.params;
+
+  const deleted = await Drone.findOneAndDelete({ droneId });
+  if (!deleted) {
+    throw new ApiError(404, "Drone not found");
+  }
+
+  res.status(200).json(new ApiResponse(200, null, "Drone deleted successfully"));
+});
+
+
 
 
 export {
     createDrone,
     getAllDrones,
     toggleDroneAvailablity,
-    editDrone
+    editDrone,
+    deleteDrone
 }

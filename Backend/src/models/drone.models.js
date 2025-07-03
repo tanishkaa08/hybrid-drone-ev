@@ -7,11 +7,16 @@ const droneSchema = new mongoose.Schema({
         unique: true,
         trim: true
     },
-    battery:{
+    currentBattery:{
         type: Number,
         required: true,
         min: 0,
         max: 100
+    },
+    batteryCapacity:{
+        type: Number,
+        required: true,
+        min: 0,
     },
     payload:{
         type: Number,
