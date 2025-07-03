@@ -7,7 +7,6 @@ export default function Dashboard() {
   const [drones, setDrones] = useState([]);
   const navigate = useNavigate();
 
-  // 🔁 Fetch all drones on mount
   useEffect(() => {
     const fetchDrones = async () => {
       try {
