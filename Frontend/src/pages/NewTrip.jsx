@@ -39,7 +39,7 @@ export default function NewTrip() {
     for (let i = 0; i < deliveries.length; i++) {
       const droneDelivery = deliveries[i];
       const truckDeliveries = deliveries.filter((_, idx) => idx !== i);
-      const suitableDrones = drones.filter(d => d.available && Number(d.payload) >= Number(droneDelivery.weight) && Number(d.batteryPercentage) > 20);
+      const suitableDrones = drones.filter(d => d.available && Number(d.payload) >= Number(droneDelivery.weight) && Number(d.currentBattery) >= 20);
       if (!suitableDrones.length) continue;
       const drone = suitableDrones[0];
       const droneDist = getDistance(HQ.lat, HQ.lng, Number(droneDelivery.latitude), Number(droneDelivery.longitude));
