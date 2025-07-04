@@ -52,7 +52,7 @@ await axios.post('/api/v1/drones/register', {
     navigate('/dashboard');
   } catch (error) {
     console.error("Failed to register drones:", error.response?.data || error.message);
-    alert("Failed to register drones. Please check console or your form.");
+    alert("Same Id Drone Already Exists. Please use a different Drone ID.");
   }
 };
 
