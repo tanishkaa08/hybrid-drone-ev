@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000', // your backend port
+      '/api': 'https://hybrid-drone-ev.onrender.com', // your backend port
     },
   },
 });
