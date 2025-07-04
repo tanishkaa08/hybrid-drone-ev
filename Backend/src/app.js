@@ -3,7 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 const app=express();
 import droneRoutes from './routes/drone.routes.js';
-
+import tripRoutes from "./routes/trip.routes.js";
 app.use(cors(
     {
         origin: process.env.CORS_ORIGIN,
@@ -25,5 +25,5 @@ app.use(express.static('public'));
 app.use(cookieParser());
 
 app.use('/api/v1/drones', droneRoutes);
-
+app.use("/api/trips", tripRoutes);
 export default app;

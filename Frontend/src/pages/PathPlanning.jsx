@@ -1,3 +1,5 @@
+/* eslint-disable no-undef */
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
@@ -7,6 +9,8 @@ import "../TripResults.css";
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+import axios from 'axios';
+
 
 // Fix leaflet marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
@@ -23,19 +27,34 @@ export default function PathPlanning() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const latest = JSON.parse(localStorage.getItem("latestTrip"));
-    setTrip(latest);
-  }, []);
+  const storedTrip = localStorage.getItem("latestTrip");
+  if (storedTrip) {
+    setTrip(JSON.parse(storedTrip));
+  } else {
+    navigate("/newtrip"); // fallback if no trip found
+  }
+}, []);
 
-  const handleExecute = () => {
-    if (trip) {
-      const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
-      allTrips.push(trip);
-      localStorage.setItem("allTrips", JSON.stringify(allTrips));
-      localStorage.removeItem("latestTrip");
-      navigate("/tripresults");
-    }
-  };
+
+ const handleExecute = async () => {
+  if (!trip) return;
+
+  try {
+    await axios.post('/api/trips/createTrip', trip);
+
+    const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
+    allTrips.push(trip);
+    localStorage.setItem("allTrips", JSON.stringify(allTrips));
+
+    localStorage.removeItem("latestTrip");
+    navigate("/tripresults");
+  } catch (error) {
+    console.error("Failed to save trip:", error);
+    alert("Error: Failed to execute trip.");
+  }
+};
+
+
 
   if (!trip) {
     return <p style={{ padding: "20px" }}>No trip data found. Please plan a trip first.</p>;
@@ -86,7 +105,7 @@ export default function PathPlanning() {
         <div className="delivery-item">
           <div>✈️ <b>Drone Delivery:</b></div>
           <div className="delivery-info">
-            <p><b>Drone:</b> {trip.drone ? trip.drone.id : 'N/A'}</p>
+            <p><b>Drone:</b> {trip.drone ? trip.drone.droneId : 'N/A'}</p>
             <p><b>To:</b> {trip.droneDelivery ? `${trip.droneDelivery.latitude}, ${trip.droneDelivery.longitude}` : 'N/A'}</p>
             <p><b>Payload:</b> {trip.droneDelivery ? trip.droneDelivery.weight : 'N/A'} kg</p>
             <p><b>Distance:</b> {trip.droneDist} mi</p>
