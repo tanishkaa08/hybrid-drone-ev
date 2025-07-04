@@ -47,7 +47,7 @@ export default function TripResults() {
         <div className="delivery-item">
           <div>✈️ <b>Drone Delivery:</b></div>
           <div className="delivery-info">
-            <p><b>Drone:</b> {trip.drone ? trip.drone.id : 'N/A'}</p>
+            <p><b>Drone:</b> {trip.drone ? trip.drone.droneId : 'N/A'}</p>
             <p><b>To:</b> {trip.droneDelivery ? `${trip.droneDelivery.latitude}, ${trip.droneDelivery.longitude}` : 'N/A'}</p>
             <p><b>Payload:</b> {trip.droneDelivery ? trip.droneDelivery.weight : 'N/A'} kg</p>
             <p><b>Distance:</b> {trip.droneDist} mi</p>
