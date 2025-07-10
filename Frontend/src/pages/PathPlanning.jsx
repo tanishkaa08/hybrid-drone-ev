@@ -1,4 +1,3 @@
-/* eslint-disable no-undef */
 /* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -507,6 +506,7 @@ export default function PathPlanning() {
           </Resizable>
         </div>
       </div>
+
       <div className="right-panel">
         <h3>Trip Details</h3>
         <p><b>Starting Point:</b> HQ Depot Bangalore (12.9716, 77.5946)</p>
@@ -577,6 +577,7 @@ export default function PathPlanning() {
             <div>Drone: {droneCarbon ? droneCarbon.toFixed(0) + 'g' : 'N/A'}</div>
           </div>
         </div>
+
         <div className="carbon-box">
           <p><b>Estimated Time</b></p>
           {(() => {
@@ -587,6 +588,7 @@ export default function PathPlanning() {
             return <h2>{formatTimeMinutes(maxTime)}</h2>;
           })()}
         </div>
+
         <div className="button-group">
           <button className="execute-btn" onClick={async () => {
             try {
