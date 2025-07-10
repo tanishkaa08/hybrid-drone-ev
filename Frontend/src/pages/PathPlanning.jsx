@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 /* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -7,6 +8,7 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import axios from "axios";
 
 // --- UI Helper: Fit map bounds to all points ---
 function FitBounds({ points }) {
@@ -122,20 +124,29 @@ export default function PathPlanning() {
 
   if (!trip) return <div>Loading...</div>;
 
-  const droneDelivery = trip.droneDelivery;
-  const truckDeliveries = trip.truckDeliveries || [];
+  // --- Robustly ensure all coordinates are numbers ---
+  const droneDelivery = {
+    ...trip.droneDelivery,
+    latitude: Number(trip.droneDelivery.latitude),
+    longitude: Number(trip.droneDelivery.longitude)
+  };
+  const truckDeliveries = (trip.truckDeliveries || []).map(del => ({
+    ...del,
+    latitude: Number(del.latitude),
+    longitude: Number(del.longitude)
+  }));
   const drone = trip.drone;
 
   const routePath = [
     [HQ.lat, HQ.lng],
-    ...truckDeliveries.map(del => [Number(del.latitude), Number(del.longitude)]),
+    ...truckDeliveries.map(del => [del.latitude, del.longitude]),
     [HQ.lat, HQ.lng]
   ];
 
   const { point: launchPoint } = findPerpendicularPointOnRoute(
     routePath,
-    Number(droneDelivery.latitude),
-    Number(droneDelivery.longitude)
+    droneDelivery.latitude,
+    droneDelivery.longitude
   );
   const landingPoint = launchPoint;
 
@@ -144,30 +155,31 @@ export default function PathPlanning() {
     ...truckDeliveries.map((del, i) => ({
       label: getLabel(i + 1),
       type: "Truck",
-      coords: [Number(del.latitude), Number(del.longitude)],
+      coords: [del.latitude, del.longitude],
       idx: i
     })),
     { label: getLabel(truckDeliveries.length + 1), type: "Launch", coords: launchPoint },
-    { label: getLabel(truckDeliveries.length + 2), type: "DroneDelivery", coords: [Number(droneDelivery.latitude), Number(droneDelivery.longitude)] },
+    { label: getLabel(truckDeliveries.length + 2), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] },
     { label: getLabel(truckDeliveries.length + 3), type: "Landing", coords: landingPoint },
     { label: getLabel(truckDeliveries.length + 4), type: "HQ", coords: [HQ.lat, HQ.lng] }
   ];
 
+  // --- Emissions and time as before ---
   let truckOnlyDist = 0;
   let prev = HQ;
   const allDeliveries = [droneDelivery, ...truckDeliveries];
   allDeliveries.forEach((del) => {
-    const next = { lat: Number(del.latitude), lng: Number(del.longitude) };
+    const next = { lat: del.latitude, lng: del.longitude };
     truckOnlyDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng);
     prev = next;
   });
   truckOnlyDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
 
-  const droneDistKm = haversineDistance(launchPoint[0], launchPoint[1], Number(droneDelivery.latitude), Number(droneDelivery.longitude)) * 2;
+  const droneDistKm = haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude) * 2;
   prev = HQ;
   let truckDist = 0;
   truckDeliveries.forEach(del => {
-    const next = { lat: Number(del.latitude), lng: Number(del.longitude) };
+    const next = { lat: del.latitude, lng: del.longitude };
     truckDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng);
     prev = next;
   });
@@ -186,119 +198,134 @@ export default function PathPlanning() {
   // For fitBounds
   const allPoints = traversalPoints.map(pt => pt.coords);
 
+  // Responsive layout helper
+  const isMobile = window.innerWidth < 900;
+
   return (
     <div style={{
       display: "flex",
-      width: "100%",
-      fontFamily: "Inter, Roboto, Arial, sans-serif",
-      background: "#f8fafc"
+      flexDirection: isMobile ? "column" : "row",
+      minHeight: "100vh",
+      background: "#f8fafc",
+      fontFamily: "Inter, Roboto, Arial, sans-serif"
     }}>
       <div style={{
-        flex: 1,
-        minHeight: "100vh",
+        flex: "1 1 600px",
+        minWidth: 340,
+        maxWidth: 900,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         background: "#e3eafc",
-        boxShadow: "0 0 12px #0001",
-        position: "relative"
+        padding: isMobile ? 8 : 32
       }}>
-        <MapContainer
-          style={{ width: "100%", height: "100vh", borderRadius: "0 16px 16px 0" }}
-          zoom={11}
-          center={allPoints[0]}
-          scrollWheelZoom={true}
-          zoomControl={false}
-        >
-          <LayersControl position="topright">
-            <LayersControl.BaseLayer checked name="OpenStreetMap">
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
-            </LayersControl.BaseLayer>
-            <LayersControl.BaseLayer name="Satellite">
-              <TileLayer url="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" maxZoom={20} subdomains={['mt0','mt1','mt2','mt3']} />
-            </LayersControl.BaseLayer>
-          </LayersControl>
-          <ZoomControl position="topright" />
-          <ScaleControl position="bottomleft" />
-          <FitBounds points={allPoints} />
-
-          {/* Markers with tooltips */}
-          {traversalPoints.map((pt, idx) => (
-            <Marker
-              key={idx}
-              position={pt.coords}
-              icon={
-                pt.type === "HQ" ? hqIcon :
-                pt.type === "Truck" ? truckIcon :
-                pt.type === "Launch" ? launchIcon :
-                pt.type === "Landing" ? landingIcon :
-                pt.type === "DroneDelivery" ? droneIcon : hqIcon
-              }
-            >
-              <Tooltip direction="top" offset={[0, -10]} opacity={1} permanent>
-                <span style={{ fontWeight: "bold", fontSize: 15 }}>{pt.label}</span>
-              </Tooltip>
-              <Popup>
-                <b>{pt.label}</b> - {pt.type}
-                {pt.type === "DroneDelivery" && trip.drone && (
-                  <div>Drone ID: <b>{trip.drone.droneId}</b></div>
-                )}
-              </Popup>
-            </Marker>
-          ))}
-          {/* Truck Route */}
-          <Polyline positions={routePath} color="#1976d2" weight={6} opacity={0.8} />
-          {/* Drone Path */}
-          {launchPoint && (
-            <Polyline
-              positions={[
-                launchPoint,
-                [Number(droneDelivery.latitude), Number(droneDelivery.longitude)],
-                landingPoint
-              ]}
-              color="#d32f2f"
-              weight={4}
-              opacity={0.9}
-              dashArray="12, 10"
-            />
-          )}
-
-          {/* Map Legend */}
-          <div style={{
-            position: "absolute",
-            bottom: 28, left: 28,
-            background: "#fff",
-            borderRadius: 10,
-            padding: "10px 18px",
-            boxShadow: "0 2px 8px #0002",
-            fontSize: 15,
-            zIndex: 999
-          }}>
-            <div style={{marginBottom: 4, fontWeight: 600, color: "#222"}}>Legend</div>
-            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
-              <span style={{
-                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#1976d2", color: "#fff", textAlign: "center", fontWeight: "bold"
-              }}>A</span> HQ
+        <div style={{
+          width: isMobile ? "98vw" : "90vw",
+          maxWidth: 800,
+          height: isMobile ? "50vh" : "70vh",
+          minHeight: 340,
+          borderRadius: isMobile ? 12 : 18,
+          boxShadow: "0 4px 32px #0002",
+          overflow: "hidden",
+          background: "#fff",
+          border: "1px solid #dbeafe",
+          position: "relative"
+        }}>
+          <MapContainer
+            style={{ width: "100%", height: "100%" }}
+            zoom={11}
+            center={allPoints[0]}
+            scrollWheelZoom={true}
+            zoomControl={false}
+          >
+            <LayersControl position="topright">
+              <LayersControl.BaseLayer checked name="OpenStreetMap">
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
+              </LayersControl.BaseLayer>
+              <LayersControl.BaseLayer name="Satellite">
+                <TileLayer url="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" maxZoom={20} subdomains={['mt0','mt1','mt2','mt3']} />
+              </LayersControl.BaseLayer>
+            </LayersControl>
+            <ZoomControl position="topright" />
+            <ScaleControl position="bottomleft" />
+            <FitBounds points={allPoints} />
+            {traversalPoints.map((pt, idx) => (
+              <Marker
+                key={idx}
+                position={pt.coords}
+                icon={
+                  pt.type === "HQ" ? hqIcon :
+                  pt.type === "Truck" ? truckIcon :
+                  pt.type === "Launch" ? launchIcon :
+                  pt.type === "Landing" ? landingIcon :
+                  pt.type === "DroneDelivery" ? droneIcon : hqIcon
+                }
+              >
+                <Tooltip direction="top" offset={[0, -10]} opacity={1} permanent>
+                  <span style={{ fontWeight: "bold", fontSize: 15 }}>{pt.label}</span>
+                </Tooltip>
+                <Popup>
+                  <b>{pt.label}</b> - {pt.type}
+                  {pt.type === "DroneDelivery" && trip.drone && (
+                    <div>Drone ID: <b>{trip.drone.droneId}</b></div>
+                  )}
+                </Popup>
+              </Marker>
+            ))}
+            <Polyline positions={routePath} color="#1976d2" weight={6} opacity={0.8} />
+            {launchPoint && (
+              <Polyline
+                positions={[
+                  launchPoint,
+                  [droneDelivery.latitude, droneDelivery.longitude],
+                  landingPoint
+                ]}
+                color="#d32f2f"
+                weight={4}
+                opacity={0.9}
+                dashArray="12, 10"
+              />
+            )}
+            {/* Map Legend */}
+            <div style={{
+              position: "absolute",
+              bottom: 28, left: 28,
+              background: "#fff",
+              borderRadius: 10,
+              padding: "10px 18px",
+              boxShadow: "0 2px 8px #0002",
+              fontSize: 15,
+              zIndex: 999
+            }}>
+              <div style={{marginBottom: 4, fontWeight: 600, color: "#222"}}>Legend</div>
+              <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+                <span style={{
+                  display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#1976d2", color: "#fff", textAlign: "center", fontWeight: "bold"
+                }}>A</span> HQ
+              </div>
+              <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+                <span style={{
+                  display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#388e3c", color: "#fff", textAlign: "center", fontWeight: "bold"
+                }}>T</span> Truck Delivery
+              </div>
+              <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+                <span style={{
+                  display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#ffa000", color: "#fff", textAlign: "center", fontWeight: "bold"
+                }}>L</span> Drone Launch
+              </div>
+              <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+                <span style={{
+                  display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#d32f2f", color: "#fff", textAlign: "center", fontWeight: "bold"
+                }}>D</span> Drone Delivery
+              </div>
+              <div style={{display: "flex", alignItems: "center", gap: 10}}>
+                <span style={{
+                  display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#7b1fa2", color: "#fff", textAlign: "center", fontWeight: "bold"
+                }}>P</span> Drone Landing
+              </div>
             </div>
-            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
-              <span style={{
-                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#388e3c", color: "#fff", textAlign: "center", fontWeight: "bold"
-              }}>T</span> Truck Delivery
-            </div>
-            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
-              <span style={{
-                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#ffa000", color: "#fff", textAlign: "center", fontWeight: "bold"
-              }}>L</span> Drone Launch
-            </div>
-            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
-              <span style={{
-                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#d32f2f", color: "#fff", textAlign: "center", fontWeight: "bold"
-              }}>D</span> Drone Delivery
-            </div>
-            <div style={{display: "flex", alignItems: "center", gap: 10}}>
-              <span style={{
-                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#7b1fa2", color: "#fff", textAlign: "center", fontWeight: "bold"
-              }}>P</span> Drone Landing
-            </div>
-          </div>
-        </MapContainer>
+          </MapContainer>
+        </div>
       </div>
       <div style={{
         flex: 1,
@@ -429,6 +456,55 @@ export default function PathPlanning() {
         </div>
         <div style={{marginTop: 16, fontSize: "1.1em"}}>
           <b>Drone Used:</b> <span style={{color: "#d32f2f"}}>{drone ? drone.droneId : "N/A"}</span>
+        </div>
+        {/* Action Buttons */}
+        <div style={{
+          display: "flex",
+          gap: 16,
+          marginTop: 32,
+          justifyContent: "flex-end"
+        }}>
+          <button
+            style={{
+              background: "#1976d2",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              padding: "12px 28px",
+              fontWeight: 600,
+              fontSize: "1.1em",
+              cursor: "pointer",
+              boxShadow: "0 2px 8px #1976d222",
+              transition: "background 0.2s"
+            }}
+            onClick={async () => {
+              try {
+                await axios.post('/api/trips/createTrip', trip);
+                const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
+                allTrips.push(trip);
+                localStorage.setItem("allTrips", JSON.stringify(allTrips));
+                localStorage.removeItem("latestTrip");
+                navigate("/tripresults");
+              } catch (error) {
+                alert("Error: Failed to execute trip.");
+              }
+            }}
+          >Execute Delivery</button>
+          <button
+            style={{
+              background: "#fff",
+              color: "#1976d2",
+              border: "2px solid #1976d2",
+              borderRadius: 8,
+              padding: "12px 28px",
+              fontWeight: 600,
+              fontSize: "1.1em",
+              cursor: "pointer",
+              boxShadow: "0 2px 8px #1976d222",
+              transition: "background 0.2s"
+            }}
+            onClick={() => navigate("/newtrip")}
+          >Edit Delivery</button>
         </div>
       </div>
     </div>
