@@ -1,130 +1,50 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
+import {
+  MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip,
+  LayersControl, ScaleControl, ZoomControl, useMap
+} from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import "../TripResults.css";
-import axios from 'axios';
-import { Resizable } from "re-resizable";
 
-const HQ = { lat: 12.9716, lng: 77.5946 }; // Bangalore HQ
-
-// Custom marker icons
-const hqIcon = new L.Icon({
-  iconUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "hq-marker"
-});
-const droneIcon = new L.Icon({
-  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "drone-marker"
-});
-const truckIcon = new L.Icon({
-  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "truck-marker"
-});
-
-// Helper function to format time as 'X min' or 'X hr Y min'
-function formatTimeMinutes(minutes) {
-  const min = Math.round(Number(minutes));
-  if (minutes === undefined || minutes === null || isNaN(min) || min < 0) return 'N/A';
-  if (min < 60) return min + ' min';
-  const hr = Math.floor(min / 60);
-  const rem = min % 60;
-  return rem === 0 ? `${hr} hr` : `${hr} hr ${rem} min`;
-}
-
-// Helper to calculate drone time (distance in km, time in min)
-function calcDroneTime(distanceKm, payloadKg) {
-  const speed = 40; // km/h
-  const baseTime = (distanceKm / speed) * 60; // min
-  const penalty = Math.ceil(payloadKg / 2); // 1 min per 2kg
-  return baseTime + penalty;
-}
-
-// Helper: Find the closest point on a polyline to a given point (lat/lng)
-function getPerpendicularLaunchPoint(routePath, deliveryLat, deliveryLng) {
-  let minDist = Infinity;
-  let closestPoint = null;
-  for (let i = 0; i < routePath.length - 1; i++) {
-    const [x1, y1] = routePath[i];
-    const [x2, y2] = routePath[i + 1];
-    const [px, py] = [deliveryLat, deliveryLng];
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    if (dx === 0 && dy === 0) continue;
-    const t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
-    let proj;
-    if (t < 0) proj = [x1, y1];
-    else if (t > 1) proj = [x2, y2];
-    else proj = [x1 + t * dx, y1 + t * dy];
-    const dist = Math.sqrt((proj[0] - px) ** 2 + (proj[1] - py) ** 2);
-    if (dist < minDist) {
-      minDist = dist;
-      closestPoint = proj;
+// --- UI Helper: Fit map bounds to all points ---
+function FitBounds({ points }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length > 0) {
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, { padding: [60, 60] });
     }
-  }
-  return closestPoint;
+  }, [map, points]);
+  return null;
 }
 
-// Helper: Find the index in routePath closest to a given point
-function findClosestIndex(routePath, point) {
-  let minDist = Infinity, idx = 0;
-  for (let i = 0; i < routePath.length; i++) {
-    const dist = Math.sqrt(
-      Math.pow(routePath[i][0] - point[0], 2) +
-      Math.pow(routePath[i][1] - point[1], 2)
-    );
-    if (dist < minDist) {
-      minDist = dist;
-      idx = i;
-    }
-  }
-  return idx;
-}
-
-// Placeholder: ML model to select which delivery is by drone
-// Input: deliveries, truck route, etc.
-// Output: index of delivery for drone, launch point (lat, lng)
-const getDroneAssignment = (deliveries, truckRoute) => {
-  // TODO: Integrate ML model here
-  // For now, pick the farthest delivery as drone delivery
-  let maxDist = -1, idx = -1;
-  deliveries.forEach((del, i) => {
-    const dist = Math.abs(Number(del.latitude) - HQ.lat) + Math.abs(Number(del.longitude) - HQ.lng);
-    if (dist > maxDist) { maxDist = dist; idx = i; }
+// --- Custom marker icons with colored letters ---
+function letterIcon(letter, color = "#1976d2") {
+  return L.divIcon({
+    html: `<div style="
+      background:${color};
+      color:#fff;
+      font-weight:bold;
+      border-radius:50%;
+      width:32px;height:32px;
+      display:flex;align-items:center;justify-content:center;
+      border:2px solid #fff;
+      box-shadow:0 0 4px #0003;
+      font-size:18px;
+    ">${letter}</div>`,
+    iconSize: [32, 32],
+    className: ""
   });
-  // Calculate perpendicular launch point (dummy: midpoint for now)
-  const launchPoint = {
-    latitude: (Number(deliveries[idx].latitude) + HQ.lat) / 2,
-    longitude: (Number(deliveries[idx].longitude) + HQ.lng) / 2
-  };
-  return { droneIdx: idx, launchPoint };
-};
+}
+const droneIcon = letterIcon("D", "#d32f2f");
+const truckIcon = letterIcon("T", "#388e3c");
+const hqIcon = letterIcon("A", "#1976d2");
+const launchIcon = letterIcon("L", "#ffa000");
+const landingIcon = letterIcon("P", "#7b1fa2");
 
-// Placeholder: ML model to select best drone
-// Input: available drones, required distance, payload
-// Output: index of best drone or -1 if none
-const selectBestDrone = (drones, requiredDistance) => {
-  // TODO: Integrate ML model here
-  // For now, pick first drone that can do 2*requiredDistance
-  return drones.findIndex(drone => drone.range >= 2 * requiredDistance);
-};
+const HQ = { lat: 40.7128, lng: -74.0060 };
 
 function toRad(x) { return (x * Math.PI) / 180; }
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -140,123 +60,57 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
-// Project a point onto a segment (lat/lng, using equirectangular approximation)
+function miles(km) { return km * 0.621371; }
 function projectPointOnSegment(A, B, P) {
-  // A, B, P: [lat, lng]
-  // Convert to equirectangular x/y (for small areas)
-  const lat1 = toRad(A[0]), lon1 = toRad(A[1]);
-  const lat2 = toRad(B[0]), lon2 = toRad(B[1]);
-  const lat0 = toRad(P[0]), lon0 = toRad(P[1]);
-  // Use A as origin
-  const x1 = 0, y1 = 0;
-  const x2 = (lon2 - lon1) * Math.cos((lat1 + lat2) / 2);
-  const y2 = lat2 - lat1;
-  const x0 = (lon0 - lon1) * Math.cos((lat1 + lat0) / 2);
-  const y0 = lat0 - lat1;
+  const toXY = ([lat, lng]) => {
+    const x = lng * Math.cos(toRad((A[0] + B[0]) / 2));
+    const y = lat;
+    return [x, y];
+  };
+  const [x1, y1] = toXY(A);
+  const [x2, y2] = toXY(B);
+  const [x0, y0] = toXY(P);
   const dx = x2 - x1;
   const dy = y2 - y1;
   if (dx === 0 && dy === 0) return A;
   const t = ((x0 - x1) * dx + (y0 - y1) * dy) / (dx * dx + dy * dy);
   if (t < 0) return A;
   if (t > 1) return B;
-  // Convert back to lat/lng
-  const latProj = A[0] + t * (B[0] - A[0]);
-  const lngProj = A[1] + t * (B[1] - A[1]);
-  return [latProj, lngProj];
+  return [A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])];
 }
-function findClosestPointOnRoute(routePath, deliveryLat, deliveryLng) {
-  if (!routePath || routePath.length === 0) {
-    console.log('findClosestPointOnRoute: routePath empty');
-    return null;
-  }
-  if (routePath.length === 1) {
-    console.log('findClosestPointOnRoute: only one point, returning', routePath[0]);
-    return routePath[0];
-  }
+function findPerpendicularPointOnRoute(routePath, deliveryLat, deliveryLng) {
   let minDist = Infinity;
   let closestPoint = null;
+  let closestIdx = 0;
   for (let i = 0; i < routePath.length - 1; i++) {
     const A = routePath[i];
     const B = routePath[i + 1];
-    const P = [deliveryLat, deliveryLng];
-    let proj = null;
-    try {
-      proj = projectPointOnSegment(A, B, P);
-    } catch (e) {
-      console.log('projectPointOnSegment error', e, A, B, P);
-      proj = null;
-    }
-    if (proj && Array.isArray(proj) && proj.length === 2 && !isNaN(proj[0]) && !isNaN(proj[1])) {
-      const dist = haversineDistance(proj[0], proj[1], deliveryLat, deliveryLng);
-      if (dist < minDist) {
-        minDist = dist;
-        closestPoint = proj;
-      }
-    } else {
-      console.log('Invalid proj', proj, 'for segment', A, B);
+    const proj = projectPointOnSegment(A, B, [deliveryLat, deliveryLng]);
+    const dist = haversineDistance(proj[0], proj[1], deliveryLat, deliveryLng);
+    if (dist < minDist) {
+      minDist = dist;
+      closestPoint = proj;
+      closestIdx = i;
     }
   }
-  // Fallback: if projection fails, use the closest route vertex
-  if (!closestPoint) {
-    console.log('No valid projection, falling back to closest vertex');
-    let minVertexDist = Infinity;
-    for (let i = 0; i < routePath.length; i++) {
-      const dist = haversineDistance(routePath[i][0], routePath[i][1], deliveryLat, deliveryLng);
-      if (dist < minVertexDist) {
-        minVertexDist = dist;
-        closestPoint = routePath[i];
-      }
-    }
-  }
-  console.log('findClosestPointOnRoute: returning', closestPoint);
-  return closestPoint;
+  return { point: closestPoint, idx: closestIdx };
 }
-
-// Custom marker for drone launch point (orange)
-const launchIcon = new L.Icon({
-  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "launch-marker"
-});
-
-// Placeholder: ML model to calculate drone time
-// Input: distance (km), payload, drone specs, etc.
-// Output: time in minutes
-const getDroneTimeML = (distanceKm, payloadKg, drone) => {
-  // TODO: Integrate ML model here
-  // For now, use calcDroneTime as a fallback
-  return calcDroneTime(distanceKm, payloadKg);
-};
-
-// Placeholder: ML model to calculate drone carbon emission
-// Input: drone, distance, payload, etc.
-// Output: carbon emission in grams or kg
-const getDroneCarbonEmissionML = (drone, distanceKm, payloadKg) => {
-  // TODO: Integrate ML model here
-  // For now, assume 50g CO2 per km per kg payload
-  return distanceKm * payloadKg * 50; // grams
-};
-
-// Placeholder: ML model to calculate truck carbon emission for a delivery
-// Input: truck, distance, payload, etc.
-// Output: carbon emission in grams or kg
-const getTruckCarbonEmissionML = (truck, distanceKm, payloadKg) => {
-  // TODO: Integrate ML model here
-  // For now, assume 120g CO2 per km per kg payload
-  return distanceKm * payloadKg * 120; // grams
-};
+function getLabel(idx) {
+  return String.fromCharCode(65 + idx);
+}
+function formatTimeMinutes(minutes) {
+  const min = Math.round(Number(minutes));
+  if (minutes === undefined || minutes === null || isNaN(min) || min < 0) return 'N/A';
+  if (min < 60) return min + ' min';
+  const hr = Math.floor(min / 60);
+  const rem = min % 60;
+  return rem === 0 ? `${hr} hr` : `${hr} hr ${rem} min`;
+}
 
 export default function PathPlanning() {
   const [trip, setTrip] = useState(null);
-  const [truckRoute, setTruckRoute] = useState({ distance: null, duration: null, loading: false, error: null });
-  const [routePath, setRoutePath] = useState([]);
   const navigate = useNavigate();
 
-  // Load trip from localStorage
   useEffect(() => {
     const storedTrip = localStorage.getItem("latestTrip");
     if (storedTrip) {
@@ -266,343 +120,315 @@ export default function PathPlanning() {
     }
   }, []);
 
-  // Compute truck route: HQ -> all truck deliveries -> HQ
-  const truckWaypoints = trip && trip.truckDeliveries && trip.truckDeliveries.length > 0
-    ? [
-        { latitude: HQ.lat, longitude: HQ.lng },
-        ...trip.truckDeliveries.map(del => ({ latitude: del.latitude, longitude: del.longitude })),
-        { latitude: HQ.lat, longitude: HQ.lng }
-      ]
-    : [];
+  if (!trip) return <div>Loading...</div>;
 
-  // Fetch truck route from Mapbox
-  useEffect(() => {
-    if (truckWaypoints.length > 1) {
-      (async () => {
-        setTruckRoute({ distance: null, duration: null, loading: true, error: null });
-        setRoutePath([]);
-        try {
-          const coordinatesStr = truckWaypoints
-            .map(wp => `${parseFloat(wp.longitude)},${parseFloat(wp.latitude)}`)
-            .join(';');
-          const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinatesStr}?geometries=geojson&access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`;
-          const res = await axios.get(url);
-          const route = res.data.routes[0];
-          const pathCoordinates = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
-          setRoutePath(pathCoordinates);
-          setTruckRoute({
-            distance: (route.distance / 1000).toFixed(2), // km
-            duration: (route.duration / 60).toFixed(0),   // min
-            loading: false,
-            error: null
-          });
-        } catch (err) {
-          setTruckRoute({ distance: null, duration: null, loading: false, error: err.message || "Failed to fetch route" });
-          setRoutePath([]);
-        }
-      })();
-    }
-  }, [JSON.stringify(truckWaypoints)]);
+  const droneDelivery = trip.droneDelivery;
+  const truckDeliveries = trip.truckDeliveries || [];
+  const drone = trip.drone;
 
-  // --- Calculate drone launch point and distance robustly ---
-  let droneLaunchPoint = null, droneDist = null, droneTime = null, droneCarbon = null, truckCarbonIfDroneByTruck = null, carbonReduction = null;
-  if (
-    trip &&
-    trip.droneDelivery &&
-    routePath &&
-    routePath.length > 1 &&
-    trip.drones &&
-    trip.drones.length > 0
-  ) {
-    const delivery = trip.droneDelivery;
-    const payloadKg = Number(delivery.weight);
-    const deliveryLat = Number(delivery.latitude);
-    const deliveryLng = Number(delivery.longitude);
-    // Always calculate the launch point as the closest point on the truck route
-    droneLaunchPoint = findClosestPointOnRoute(routePath, deliveryLat, deliveryLng);
-    console.log('Calculated droneLaunchPoint:', droneLaunchPoint);
-    if (droneLaunchPoint) {
-      droneDist = haversineDistance(droneLaunchPoint[0], droneLaunchPoint[1], deliveryLat, deliveryLng);
-      const drone = trip.drones[0];
-      droneTime = getDroneTimeML(droneDist, payloadKg, drone);
-      droneCarbon = getDroneCarbonEmissionML(drone, droneDist, payloadKg);
-      const truck = { type: 'default' };
-      const truckDist = haversineDistance(HQ.lat, HQ.lng, deliveryLat, deliveryLng) * 2;
-      truckCarbonIfDroneByTruck = getTruckCarbonEmissionML(truck, truckDist, payloadKg);
-      if (truckCarbonIfDroneByTruck > 0) {
-        carbonReduction = (((truckCarbonIfDroneByTruck - droneCarbon) / truckCarbonIfDroneByTruck) * 100).toFixed(1);
-      }
-    }
-  }
+  const routePath = [
+    [HQ.lat, HQ.lng],
+    ...truckDeliveries.map(del => [Number(del.latitude), Number(del.longitude)]),
+    [HQ.lat, HQ.lng]
+  ];
 
-  // UI rendering
-  if (!trip) {
-    return <p style={{ padding: "20px" }}>No trip data found. Please plan a trip first.</p>;
-  }
+  const { point: launchPoint } = findPerpendicularPointOnRoute(
+    routePath,
+    Number(droneDelivery.latitude),
+    Number(droneDelivery.longitude)
+  );
+  const landingPoint = launchPoint;
 
-  // Center map between HQ and first delivery
-  const center = trip.droneDelivery
-    ? [
-        (Number(trip.droneDelivery.latitude) + HQ.lat) / 2,
-        (Number(trip.droneDelivery.longitude) + HQ.lng) / 2,
-      ]
-    : [HQ.lat, HQ.lng];
+  let traversalPoints = [
+    { label: "A", type: "HQ", coords: [HQ.lat, HQ.lng] },
+    ...truckDeliveries.map((del, i) => ({
+      label: getLabel(i + 1),
+      type: "Truck",
+      coords: [Number(del.latitude), Number(del.longitude)],
+      idx: i
+    })),
+    { label: getLabel(truckDeliveries.length + 1), type: "Launch", coords: launchPoint },
+    { label: getLabel(truckDeliveries.length + 2), type: "DroneDelivery", coords: [Number(droneDelivery.latitude), Number(droneDelivery.longitude)] },
+    { label: getLabel(truckDeliveries.length + 3), type: "Landing", coords: landingPoint },
+    { label: getLabel(truckDeliveries.length + 4), type: "HQ", coords: [HQ.lat, HQ.lng] }
+  ];
 
-  // --- Trip Timeline UI ---
-  // Build the timeline steps based on the real path and deliveries
-  const timelineSteps = [];
-  if (trip && trip.truckDeliveries && trip.truckDeliveries.length > 0 && trip.droneDelivery && droneLaunchPoint) {
-    // HQ
-    timelineSteps.push({
-      label: 'HQ',
-      icon: '🏢',
-      coords: [HQ.lat, HQ.lng],
-      type: 'hq',
-    });
-    // Truck deliveries before launch point
-    let launchIdx = 0;
-    let minDist = Infinity;
-    trip.truckDeliveries.forEach((del, idx) => {
-      const dist = haversineDistance(droneLaunchPoint[0], droneLaunchPoint[1], Number(del.latitude), Number(del.longitude));
-      if (dist < minDist) {
-        minDist = dist;
-        launchIdx = idx + 1; // +1 because HQ is at index 0
-      }
-    });
-    trip.truckDeliveries.forEach((del, idx) => {
-      timelineSteps.push({
-        label: `Truck Delivery ${String.fromCharCode(65 + idx)}`,
-        icon: '🚚',
-        coords: [Number(del.latitude), Number(del.longitude)],
-        type: 'truck',
-      });
-      if (idx === launchIdx - 1) {
-        // Insert launch point after this delivery
-        timelineSteps.push({
-          label: 'Drone Launch Point',
-          icon: '🚁',
-          coords: [droneLaunchPoint[0], droneLaunchPoint[1]],
-          type: 'launch',
-        });
-        timelineSteps.push({
-          label: 'Drone Delivery',
-          icon: '📦',
-          coords: [Number(trip.droneDelivery.latitude), Number(trip.droneDelivery.longitude)],
-          type: 'drone',
-        });
-        timelineSteps.push({
-          label: 'Drone Pickup (Truck waits)',
-          icon: '🤝',
-          coords: [droneLaunchPoint[0], droneLaunchPoint[1]],
-          type: 'pickup',
-        });
-      }
-    });
-    // Truck deliveries after launch point
-    // (If any deliveries after the launch point, add them)
-    if (launchIdx < trip.truckDeliveries.length) {
-      for (let i = launchIdx; i < trip.truckDeliveries.length; i++) {
-        const del = trip.truckDeliveries[i];
-        timelineSteps.push({
-          label: `Truck Delivery ${String.fromCharCode(65 + i)}`,
-          icon: '🚚',
-          coords: [Number(del.latitude), Number(del.longitude)],
-          type: 'truck',
-        });
-      }
-    }
-    // Return to HQ
-    timelineSteps.push({
-      label: 'Return to HQ',
-      icon: '🏢',
-      coords: [HQ.lat, HQ.lng],
-      type: 'hq',
-    });
-  }
+  let truckOnlyDist = 0;
+  let prev = HQ;
+  const allDeliveries = [droneDelivery, ...truckDeliveries];
+  allDeliveries.forEach((del) => {
+    const next = { lat: Number(del.latitude), lng: Number(del.longitude) };
+    truckOnlyDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng);
+    prev = next;
+  });
+  truckOnlyDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
 
-  console.log('routePath', routePath);
-  if (trip && trip.droneDelivery) {
-    console.log('deliveryLat', Number(trip.droneDelivery.latitude), 'deliveryLng', Number(trip.droneDelivery.longitude));
-  }
-  console.log('droneLaunchPoint', droneLaunchPoint);
+  const droneDistKm = haversineDistance(launchPoint[0], launchPoint[1], Number(droneDelivery.latitude), Number(droneDelivery.longitude)) * 2;
+  prev = HQ;
+  let truckDist = 0;
+  truckDeliveries.forEach(del => {
+    const next = { lat: Number(del.latitude), lng: Number(del.longitude) };
+    truckDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng);
+    prev = next;
+  });
+  truckDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
+
+  const TRUCK_EMISSION_PER_MILE = 1.2;
+  const DRONE_EMISSION_PER_MILE = 0.1;
+  const truckOnlyCarbon = miles(truckOnlyDist) * TRUCK_EMISSION_PER_MILE;
+  const hybridCarbon = miles(truckDist) * TRUCK_EMISSION_PER_MILE + miles(droneDistKm) * DRONE_EMISSION_PER_MILE;
+  const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
+
+  const truckTime = (truckDist / 30) * 60;
+  const droneTime = (droneDistKm / 40) * 60;
+  const totalTime = Math.max(truckTime, droneTime);
+
+  // For fitBounds
+  const allPoints = traversalPoints.map(pt => pt.coords);
 
   return (
-    <div className="path-planning-page">
-      <div className="left-panel">
-        <h2>Path Planning</h2>
-        <div className="map-section" style={{ width: "100%" }}>
-          <Resizable
-            defaultSize={{ width: "100%", height: 300 }}
-            minHeight={200}
-            maxHeight={800}
-            enable={{ top: true, right: false, bottom: true, left: false }}
-            style={{ width: "100%" }}
-          >
-            <MapContainer
-              center={center}
-              zoom={8}
-              style={{ width: "100%", height: "100%" }}
+    <div style={{
+      display: "flex",
+      width: "100%",
+      fontFamily: "Inter, Roboto, Arial, sans-serif",
+      background: "#f8fafc"
+    }}>
+      <div style={{
+        flex: 1,
+        minHeight: "100vh",
+        background: "#e3eafc",
+        boxShadow: "0 0 12px #0001",
+        position: "relative"
+      }}>
+        <MapContainer
+          style={{ width: "100%", height: "100vh", borderRadius: "0 16px 16px 0" }}
+          zoom={11}
+          center={allPoints[0]}
+          scrollWheelZoom={true}
+          zoomControl={false}
+        >
+          <LayersControl position="topright">
+            <LayersControl.BaseLayer checked name="OpenStreetMap">
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
+            </LayersControl.BaseLayer>
+            <LayersControl.BaseLayer name="Satellite">
+              <TileLayer url="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" maxZoom={20} subdomains={['mt0','mt1','mt2','mt3']} />
+            </LayersControl.BaseLayer>
+          </LayersControl>
+          <ZoomControl position="topright" />
+          <ScaleControl position="bottomleft" />
+          <FitBounds points={allPoints} />
+
+          {/* Markers with tooltips */}
+          {traversalPoints.map((pt, idx) => (
+            <Marker
+              key={idx}
+              position={pt.coords}
+              icon={
+                pt.type === "HQ" ? hqIcon :
+                pt.type === "Truck" ? truckIcon :
+                pt.type === "Launch" ? launchIcon :
+                pt.type === "Landing" ? landingIcon :
+                pt.type === "DroneDelivery" ? droneIcon : hqIcon
+              }
             >
-              <TileLayer
-                url={`https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
-                id="mapbox/streets-v11"
-                tileSize={512}
-                zoomOffset={-1}
-                attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> contributors'
-              />
-              <Marker position={[HQ.lat, HQ.lng]} icon={hqIcon}>
-                <Popup>HQ Depot (A)</Popup>
-              </Marker>
-              {trip.droneDelivery && (
-                <Marker
-                  position={[Number(trip.droneDelivery.latitude), Number(trip.droneDelivery.longitude)]}
-                  icon={droneIcon}
-                >
-                  <Popup>Drone Delivery (B)</Popup>
-                </Marker>
-              )}
-              {trip.truckDeliveries &&
-                trip.truckDeliveries.map((del, idx) => (
-                  <Marker
-                    key={idx}
-                    position={[Number(del.latitude), Number(del.longitude)]}
-                    icon={truckIcon}
-                  >
-                    <Popup>Truck Delivery ({String.fromCharCode(67 + idx)})</Popup>
-                  </Marker>
-                ))}
-              {/* Drone launch marker and path always rendered if possible */}
-              {droneLaunchPoint && (
-                <Marker
-                  position={[droneLaunchPoint[0], droneLaunchPoint[1]]}
-                  icon={launchIcon}
-                >
-                  <Popup>Drone Launch Point (D)</Popup>
-                </Marker>
-              )}
-              {droneLaunchPoint && trip.droneDelivery && (
-                <Polyline
-                  positions={[
-                    [droneLaunchPoint[0], droneLaunchPoint[1]],
-                    [Number(trip.droneDelivery.latitude), Number(trip.droneDelivery.longitude)],
-                    [droneLaunchPoint[0], droneLaunchPoint[1]]
-                  ]}
-                  color="red"
-                  weight={3}
-                  opacity={0.7}
-                  dashArray="8, 12"
-                />
-              )}
-              {/* Truck route path */}
-              {routePath.length > 1 && (
-                <Polyline
-                  positions={routePath}
-                  color="blue"
-                  weight={3}
-                  opacity={0.7}
-                />
-              )}
-            </MapContainer>
-          </Resizable>
-        </div>
+              <Tooltip direction="top" offset={[0, -10]} opacity={1} permanent>
+                <span style={{ fontWeight: "bold", fontSize: 15 }}>{pt.label}</span>
+              </Tooltip>
+              <Popup>
+                <b>{pt.label}</b> - {pt.type}
+                {pt.type === "DroneDelivery" && trip.drone && (
+                  <div>Drone ID: <b>{trip.drone.droneId}</b></div>
+                )}
+              </Popup>
+            </Marker>
+          ))}
+          {/* Truck Route */}
+          <Polyline positions={routePath} color="#1976d2" weight={6} opacity={0.8} />
+          {/* Drone Path */}
+          {launchPoint && (
+            <Polyline
+              positions={[
+                launchPoint,
+                [Number(droneDelivery.latitude), Number(droneDelivery.longitude)],
+                landingPoint
+              ]}
+              color="#d32f2f"
+              weight={4}
+              opacity={0.9}
+              dashArray="12, 10"
+            />
+          )}
+
+          {/* Map Legend */}
+          <div style={{
+            position: "absolute",
+            bottom: 28, left: 28,
+            background: "#fff",
+            borderRadius: 10,
+            padding: "10px 18px",
+            boxShadow: "0 2px 8px #0002",
+            fontSize: 15,
+            zIndex: 999
+          }}>
+            <div style={{marginBottom: 4, fontWeight: 600, color: "#222"}}>Legend</div>
+            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+              <span style={{
+                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#1976d2", color: "#fff", textAlign: "center", fontWeight: "bold"
+              }}>A</span> HQ
+            </div>
+            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+              <span style={{
+                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#388e3c", color: "#fff", textAlign: "center", fontWeight: "bold"
+              }}>T</span> Truck Delivery
+            </div>
+            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+              <span style={{
+                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#ffa000", color: "#fff", textAlign: "center", fontWeight: "bold"
+              }}>L</span> Drone Launch
+            </div>
+            <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 2}}>
+              <span style={{
+                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#d32f2f", color: "#fff", textAlign: "center", fontWeight: "bold"
+              }}>D</span> Drone Delivery
+            </div>
+            <div style={{display: "flex", alignItems: "center", gap: 10}}>
+              <span style={{
+                display: "inline-block", width: 18, height: 18, borderRadius: "50%", background: "#7b1fa2", color: "#fff", textAlign: "center", fontWeight: "bold"
+              }}>P</span> Drone Landing
+            </div>
+          </div>
+        </MapContainer>
       </div>
-
-      <div className="right-panel">
-        <h3>Trip Details</h3>
-        <p><b>Starting Point:</b> HQ Depot Bangalore (12.9716, 77.5946)</p>
-        <div className="delivery-item">
-          <div><b>Drone Delivery:</b></div>
-          <div className="delivery-info">
-            <p><b>Drone ID:</b> {trip.drone ? trip.drone.droneId : 'N/A'} | 
-              <b> Location:</b> {trip.droneDelivery ? `${trip.droneDelivery.latitude}, ${trip.droneDelivery.longitude}` : 'N/A'} | 
-              <b> Payload:</b> {trip.droneDelivery ? trip.droneDelivery.weight : 'N/A'} kg</p>
-            <p>
-              <b>Drone Straight-Line Distance (one-way):</b> {typeof droneDist === 'number' ? droneDist.toFixed(2) + ' km' : <span style={{color:'red'}}>Cannot calculate (missing launch or delivery point)</span>}<br/>
-              <b>Drone Round-Trip Distance:</b> {typeof droneDist === 'number' ? (2 * droneDist).toFixed(2) + ' km' : <span style={{color:'red'}}>Cannot calculate</span>}<br/>
-              <b>Time:</b> {droneTime !== null && droneTime !== undefined ? formatTimeMinutes(droneTime) : 'N/A'}
-            </p>
-            {/* Fallback error message if launch point is not found */}
-            {!droneLaunchPoint && (
-              <div style={{color: 'red', marginTop: 8}}>
-                No valid launch point found. Please check your delivery locations.
-              </div>
-            )}
+      <div style={{
+        flex: 1,
+        padding: "36px 36px 36px 48px",
+        background: "#fff",
+        minHeight: "100vh",
+        boxShadow: "0 0 24px #0002",
+        display: "flex",
+        flexDirection: "column"
+      }}>
+        <h2 style={{marginBottom: 12, color: "#1976d2", letterSpacing: 1}}>Trip Details</h2>
+        <div style={{
+          background: "#f1f8e9",
+          borderRadius: 12,
+          padding: "16px 20px",
+          marginBottom: 18,
+          boxShadow: "0 2px 8px #0001"
+        }}>
+          <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 4}}>Carbon Emission Reduction</div>
+          <div style={{
+            fontSize: "2em",
+            fontWeight: 700,
+            color: "#43a047",
+            marginBottom: 4
+          }}>{carbonReduction.toFixed(1)}%</div>
+          <div style={{ fontSize: "0.97em", color: "#666" }}>
+            <span style={{marginRight: 16}}>
+              <span style={{fontWeight: 500}}>Truck Only: </span>
+              {truckOnlyCarbon.toFixed(2)} kg CO₂
+            </span>
+            <span>
+              <span style={{fontWeight: 500}}>Hybrid: </span>
+              {hybridCarbon.toFixed(2)} kg CO₂
+            </span>
           </div>
         </div>
-        {trip.truckDeliveries && trip.truckDeliveries.length > 0 && (
-          <div className="delivery-item">
-            <div>🚚 <b>Truck Deliveries:</b></div>
-            <div className="delivery-info">
-              {trip.truckDeliveries.map((del, idx) => (
-                <p key={idx}><b>Location:</b> {del.latitude}, {del.longitude} | <b>Payload:</b> {del.weight} kg</p>
+        <div style={{
+          background: "#e3f2fd",
+          borderRadius: 12,
+          padding: "16px 20px",
+          marginBottom: 18,
+          boxShadow: "0 2px 8px #0001"
+        }}>
+          <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 4}}>Estimated Time</div>
+          <div style={{
+            fontSize: "2em",
+            fontWeight: 700,
+            color: "#1976d2"
+          }}>{formatTimeMinutes(totalTime)}</div>
+        </div>
+        <div style={{
+          background: "#f6f8fa",
+          borderRadius: 12,
+          padding: "18px 22px",
+          marginBottom: 18,
+          boxShadow: "0 2px 8px #0001"
+        }}>
+          <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 6}}>Traversal Order</div>
+          <div style={{display: "flex", flexWrap: "wrap", gap: 10}}>
+            {traversalPoints.map((pt, idx) => (
+              <span key={idx} style={{
+                display: "inline-flex",
+                alignItems: "center",
+                background: "#e3eafc",
+                borderRadius: 8,
+                padding: "4px 12px",
+                marginRight: 6,
+                fontWeight: 500,
+                color: "#1976d2",
+                fontSize: "1em"
+              }}>
+                <span style={{
+                  display: "inline-block",
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  background: "#1976d2",
+                  color: "#fff",
+                  fontWeight: 700,
+                  textAlign: "center",
+                  lineHeight: "22px",
+                  marginRight: 6
+                }}>{pt.label}</span>
+                {pt.type}
+                {idx < traversalPoints.length - 1 ? <span style={{margin: "0 8px", color: "#aaa"}}>→</span> : ""}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div style={{
+          background: "#fff",
+          borderRadius: 12,
+          padding: "18px 22px",
+          marginBottom: 18,
+          boxShadow: "0 2px 8px #0001"
+        }}>
+          <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 6}}>Locations</div>
+          <table style={{width: "100%", fontSize: "1em", borderCollapse: "collapse"}}>
+            <tbody>
+              <tr>
+                <td style={{fontWeight: 500, color: "#1976d2"}}>HQ (A):</td>
+                <td>{HQ.lat}, {HQ.lng}</td>
+              </tr>
+              {truckDeliveries.map((del, idx) => (
+                <tr key={idx}>
+                  <td style={{fontWeight: 500, color: "#388e3c"}}>{getLabel(idx + 1)} (Truck):</td>
+                  <td>{del.latitude}, {del.longitude}</td>
+                </tr>
               ))}
-              {/* Truck route time and distance from Mapbox */}
-              {truckRoute.loading ? (
-                <p>Loading truck route...</p>
-              ) : truckRoute.error ? (
-                <p style={{ color: 'red' }}>{truckRoute.error}</p>
-              ) : (
-                truckRoute.distance && truckRoute.duration && (
-                  <p><b>Distance:</b> {truckRoute.distance} km, <b>Time:</b> {formatTimeMinutes(truckRoute.duration)}</p>
-                )
-              )}
-            </div>
-          </div>
-        )}
-        {/* Path Timeline: now placed below truck deliveries and above carbon emissions */}
-        {timelineSteps && timelineSteps.length > 0 && (
-          <div className="timeline-section" style={{margin: '24px 0'}}>
-            <h4>Path Timeline</h4>
-            <div style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start'}}>
-              {timelineSteps.map((step, idx) => (
-                <div key={idx} style={{display: 'flex', alignItems: 'center', marginBottom: 12}}>
-                  <div style={{width: 32, height: 32, borderRadius: 16, background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, border: '2px solid #e5e7eb'}}>
-                    {step.icon}
-                  </div>
-                  <div style={{marginLeft: 12, fontWeight: 500, fontSize: 16}}>{step.label}</div>
-                  {idx < timelineSteps.length - 1 && (
-                    <div style={{width: 2, height: 32, background: '#e5e7eb', marginLeft: 15}}></div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {/* Carbon Emissions Reduction section follows timeline */}
-        <div className="carbon-box">
-          <p><b>Carbon Emissions Reduction</b></p>
-          <h2>{carbonReduction !== null ? `${carbonReduction}%` : 'N/A'}</h2>
-          <div style={{ fontSize: '0.9em', color: '#666' }}>
-            <div>Truck (if drone delivery by truck): {truckCarbonIfDroneByTruck ? truckCarbonIfDroneByTruck.toFixed(0) + 'g' : 'N/A'}</div>
-            <div>Drone: {droneCarbon ? droneCarbon.toFixed(0) + 'g' : 'N/A'}</div>
-          </div>
+              <tr>
+                <td style={{fontWeight: 500, color: "#ffa000"}}>{getLabel(truckDeliveries.length + 1)} (Launch):</td>
+                <td>{launchPoint ? `${launchPoint[0].toFixed(5)}, ${launchPoint[1].toFixed(5)}` : "N/A"}</td>
+              </tr>
+              <tr>
+                <td style={{fontWeight: 500, color: "#d32f2f"}}>{getLabel(truckDeliveries.length + 2)} (Drone Delivery):</td>
+                <td>{droneDelivery.latitude}, {droneDelivery.longitude}</td>
+              </tr>
+              <tr>
+                <td style={{fontWeight: 500, color: "#7b1fa2"}}>{getLabel(truckDeliveries.length + 3)} (Landing):</td>
+                <td>{landingPoint ? `${landingPoint[0].toFixed(5)}, ${landingPoint[1].toFixed(5)}` : "N/A"}</td>
+              </tr>
+              <tr>
+                <td style={{fontWeight: 500, color: "#1976d2"}}>{getLabel(truckDeliveries.length + 4)} (HQ):</td>
+                <td>{HQ.lat}, {HQ.lng}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-
-        <div className="carbon-box">
-          <p><b>Estimated Time</b></p>
-          {(() => {
-            const tDrone = droneTime;
-            const tTruck = Number(truckRoute.duration);
-            if ((!tDrone && tDrone !== 0) && (!tTruck && tTruck !== 0)) return <h2>N/A</h2>;
-            const maxTime = Math.max(tDrone || 0, tTruck || 0);
-            return <h2>{formatTimeMinutes(maxTime)}</h2>;
-          })()}
-        </div>
-
-        <div className="button-group">
-          <button className="execute-btn" onClick={async () => {
-            try {
-              await axios.post('/api/trips/createTrip', trip);
-              const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
-              allTrips.push(trip);
-              localStorage.setItem("allTrips", JSON.stringify(allTrips));
-              localStorage.removeItem("latestTrip");
-              navigate("/tripresults");
-            } catch (error) {
-              alert("Error: Failed to execute trip.");
-            }
-          }}>Execute Delivery</button>
-          <button className="edit-btn" onClick={() => navigate("/newtrip")}>Edit Delivery</button>
+        <div style={{marginTop: 16, fontSize: "1.1em"}}>
+          <b>Drone Used:</b> <span style={{color: "#d32f2f"}}>{drone ? drone.droneId : "N/A"}</span>
         </div>
       </div>
     </div>
