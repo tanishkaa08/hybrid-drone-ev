@@ -10,4 +10,4 @@ export default defineConfig({
       '/api': 'http://localhost:8000', // your backend port
     },
   },
-});
+})
