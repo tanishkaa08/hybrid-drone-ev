@@ -63,40 +63,6 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 function miles(km) { return km * 0.621371; }
-function projectPointOnSegment(A, B, P) {
-  const toXY = ([lat, lng]) => {
-    const x = lng * Math.cos(toRad((A[0] + B[0]) / 2));
-    const y = lat;
-    return [x, y];
-  };
-  const [x1, y1] = toXY(A);
-  const [x2, y2] = toXY(B);
-  const [x0, y0] = toXY(P);
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  if (dx === 0 && dy === 0) return A;
-  const t = ((x0 - x1) * dx + (y0 - y1) * dy) / (dx * dx + dy * dy);
-  if (t < 0) return A;
-  if (t > 1) return B;
-  return [A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])];
-}
-function findPerpendicularPointOnRoute(routePath, deliveryLat, deliveryLng) {
-  let minDist = Infinity;
-  let closestPoint = null;
-  let closestIdx = 0;
-  for (let i = 0; i < routePath.length - 1; i++) {
-    const A = routePath[i];
-    const B = routePath[i + 1];
-    const proj = projectPointOnSegment(A, B, [deliveryLat, deliveryLng]);
-    const dist = haversineDistance(proj[0], proj[1], deliveryLat, deliveryLng);
-    if (dist < minDist) {
-      minDist = dist;
-      closestPoint = proj;
-      closestIdx = i;
-    }
-  }
-  return { point: closestPoint, idx: closestIdx };
-}
 function getLabel(idx) {
   return String.fromCharCode(65 + idx);
 }
@@ -107,6 +73,48 @@ function formatTimeMinutes(minutes) {
   const hr = Math.floor(min / 60);
   const rem = min % 60;
   return rem === 0 ? `${hr} hr` : `${hr} hr ${rem} min`;
+}
+
+// --- Nearest Neighbor TSP Heuristic for Truck Route (excluding drone delivery) ---
+function nearestNeighborRoute(hq, deliveries) {
+  const unvisited = deliveries.slice();
+  let route = [[hq.lat, hq.lng]];
+  let current = { lat: hq.lat, lng: hq.lng };
+  while (unvisited.length > 0) {
+    let minIdx = 0, minDist = Infinity;
+    for (let i = 0; i < unvisited.length; i++) {
+      const d = haversineDistance(current.lat, current.lng, Number(unvisited[i].latitude), Number(unvisited[i].longitude));
+      if (d < minDist) {
+        minDist = d;
+        minIdx = i;
+      }
+    }
+    current = {
+      lat: Number(unvisited[minIdx].latitude),
+      lng: Number(unvisited[minIdx].longitude)
+    };
+    route.push([current.lat, current.lng]);
+    unvisited.splice(minIdx, 1);
+  }
+  route.push([hq.lat, hq.lng]);
+  return route;
+}
+
+// --- Find closest truck node (HQ or delivery) to drone delivery ---
+function findClosestNodeOnRoute(routeNodes, deliveryLat, deliveryLng) {
+  let minDist = Infinity;
+  let closestNode = null;
+  let closestIdx = 0;
+  for (let i = 0; i < routeNodes.length; i++) {
+    const node = routeNodes[i];
+    const dist = haversineDistance(node[0], node[1], deliveryLat, deliveryLng);
+    if (dist < minDist) {
+      minDist = dist;
+      closestNode = node;
+      closestIdx = i;
+    }
+  }
+  return { point: closestNode, idx: closestIdx };
 }
 
 export default function PathPlanning() {
@@ -130,6 +138,7 @@ export default function PathPlanning() {
     latitude: Number(trip.droneDelivery.latitude),
     longitude: Number(trip.droneDelivery.longitude)
   };
+  // Exclude drone delivery from truck deliveries
   const truckDeliveries = (trip.truckDeliveries || []).map(del => ({
     ...del,
     latitude: Number(del.latitude),
@@ -137,34 +146,63 @@ export default function PathPlanning() {
   }));
   const drone = trip.drone;
 
-  const routePath = [
-    [HQ.lat, HQ.lng],
-    ...truckDeliveries.map(del => [del.latitude, del.longitude]),
-    [HQ.lat, HQ.lng]
-  ];
+  // --- Optimized Truck Route (Nearest Neighbor) ---
+  const optimizedRoutePath = nearestNeighborRoute(HQ, truckDeliveries);
 
-  const { point: launchPoint } = findPerpendicularPointOnRoute(
-    routePath,
+  // --- Find best launch/landing node (must be a node on the route) ---
+  const { point: launchPoint, idx: launchIdx } = findClosestNodeOnRoute(
+    optimizedRoutePath,
     droneDelivery.latitude,
     droneDelivery.longitude
   );
-  const landingPoint = launchPoint;
+  const landingPoint = launchPoint; // always a node
 
+  // --- Traversal points for UI ---
   let traversalPoints = [
     { label: "A", type: "HQ", coords: [HQ.lat, HQ.lng] },
-    ...truckDeliveries.map((del, i) => ({
+    ...optimizedRoutePath.slice(1, -1).map((coords, i) => ({
       label: getLabel(i + 1),
       type: "Truck",
-      coords: [del.latitude, del.longitude],
+      coords,
       idx: i
     })),
-    { label: getLabel(truckDeliveries.length + 1), type: "Launch", coords: launchPoint },
-    { label: getLabel(truckDeliveries.length + 2), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] },
-    { label: getLabel(truckDeliveries.length + 3), type: "Landing", coords: landingPoint },
-    { label: getLabel(truckDeliveries.length + 4), type: "HQ", coords: [HQ.lat, HQ.lng] }
+    { label: getLabel(optimizedRoutePath.length - 1), type: "Launch", coords: launchPoint },
+    { label: getLabel(optimizedRoutePath.length), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] },
+    { label: getLabel(optimizedRoutePath.length + 1), type: "Landing", coords: landingPoint },
+    { label: getLabel(optimizedRoutePath.length + 2), type: "HQ", coords: [HQ.lat, HQ.lng] }
   ];
 
-  // --- Emissions and time as before ---
+  // --- Calculate truck time to launch node ---
+  let truckTimeToLaunch = 0;
+  for (let i = 0; i < launchIdx; i++) {
+    truckTimeToLaunch += haversineDistance(
+      optimizedRoutePath[i][0], optimizedRoutePath[i][1],
+      optimizedRoutePath[i+1][0], optimizedRoutePath[i+1][1]
+    );
+  }
+  truckTimeToLaunch = (truckTimeToLaunch / 30) * 60; // 30 km/h
+
+  // --- Drone round trip time (launch -> delivery -> launch) ---
+  const droneLeg = haversineDistance(
+    launchPoint[0], launchPoint[1],
+    droneDelivery.latitude, droneDelivery.longitude
+  );
+  const droneTripTime = (2 * droneLeg / 40) * 60; // 40 km/h
+
+  // --- Truck time from launch node to HQ (after rendezvous) ---
+  let truckTimeAfter = 0;
+  for (let i = launchIdx; i < optimizedRoutePath.length - 1; i++) {
+    truckTimeAfter += haversineDistance(
+      optimizedRoutePath[i][0], optimizedRoutePath[i][1],
+      optimizedRoutePath[i+1][0], optimizedRoutePath[i+1][1]
+    );
+  }
+  truckTimeAfter = (truckTimeAfter / 30) * 60;
+
+  // --- Total trip time: truck to launch + max(drone round trip, 0) + truck to HQ ---
+  const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, 0) + truckTimeAfter;
+
+  // --- Emissions (truck only, hybrid) ---
   let truckOnlyDist = 0;
   let prev = HQ;
   const allDeliveries = [droneDelivery, ...truckDeliveries];
@@ -175,25 +213,20 @@ export default function PathPlanning() {
   });
   truckOnlyDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
 
-  const droneDistKm = haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude) * 2;
-  prev = HQ;
+  const droneDistKm = droneLeg * 2;
   let truckDist = 0;
-  truckDeliveries.forEach(del => {
-    const next = { lat: del.latitude, lng: del.longitude };
-    truckDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng);
-    prev = next;
-  });
-  truckDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
+  for (let i = 0; i < optimizedRoutePath.length - 1; i++) {
+    truckDist += haversineDistance(
+      optimizedRoutePath[i][0], optimizedRoutePath[i][1],
+      optimizedRoutePath[i+1][0], optimizedRoutePath[i+1][1]
+    );
+  }
 
   const TRUCK_EMISSION_PER_MILE = 1.2;
   const DRONE_EMISSION_PER_MILE = 0.1;
   const truckOnlyCarbon = miles(truckOnlyDist) * TRUCK_EMISSION_PER_MILE;
   const hybridCarbon = miles(truckDist) * TRUCK_EMISSION_PER_MILE + miles(droneDistKm) * DRONE_EMISSION_PER_MILE;
   const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
-
-  const truckTime = (truckDist / 30) * 60;
-  const droneTime = (droneDistKm / 40) * 60;
-  const totalTime = Math.max(truckTime, droneTime);
 
   // For fitBounds
   const allPoints = traversalPoints.map(pt => pt.coords);
@@ -272,7 +305,7 @@ export default function PathPlanning() {
                 </Popup>
               </Marker>
             ))}
-            <Polyline positions={routePath} color="#1976d2" weight={6} opacity={0.8} />
+            <Polyline positions={optimizedRoutePath} color="#1976d2" weight={6} opacity={0.8} />
             {launchPoint && (
               <Polyline
                 positions={[
@@ -374,7 +407,7 @@ export default function PathPlanning() {
             fontSize: "2em",
             fontWeight: 700,
             color: "#1976d2"
-          }}>{formatTimeMinutes(totalTime)}</div>
+          }}>{formatTimeMinutes(totalTripTime)}</div>
         </div>
         <div style={{
           background: "#f6f8fa",
@@ -429,26 +462,26 @@ export default function PathPlanning() {
                 <td style={{fontWeight: 500, color: "#1976d2"}}>HQ (A):</td>
                 <td>{HQ.lat}, {HQ.lng}</td>
               </tr>
-              {truckDeliveries.map((del, idx) => (
+              {optimizedRoutePath.slice(1, -1).map((coords, idx) => (
                 <tr key={idx}>
                   <td style={{fontWeight: 500, color: "#388e3c"}}>{getLabel(idx + 1)} (Truck):</td>
-                  <td>{del.latitude}, {del.longitude}</td>
+                  <td>{coords[0]}, {coords[1]}</td>
                 </tr>
               ))}
               <tr>
-                <td style={{fontWeight: 500, color: "#ffa000"}}>{getLabel(truckDeliveries.length + 1)} (Launch):</td>
+                <td style={{fontWeight: 500, color: "#ffa000"}}>{getLabel(optimizedRoutePath.length - 1)} (Launch):</td>
                 <td>{launchPoint ? `${launchPoint[0].toFixed(5)}, ${launchPoint[1].toFixed(5)}` : "N/A"}</td>
               </tr>
               <tr>
-                <td style={{fontWeight: 500, color: "#d32f2f"}}>{getLabel(truckDeliveries.length + 2)} (Drone Delivery):</td>
+                <td style={{fontWeight: 500, color: "#d32f2f"}}>{getLabel(optimizedRoutePath.length)} (Drone Delivery):</td>
                 <td>{droneDelivery.latitude}, {droneDelivery.longitude}</td>
               </tr>
               <tr>
-                <td style={{fontWeight: 500, color: "#7b1fa2"}}>{getLabel(truckDeliveries.length + 3)} (Landing):</td>
+                <td style={{fontWeight: 500, color: "#7b1fa2"}}>{getLabel(optimizedRoutePath.length + 1)} (Landing):</td>
                 <td>{landingPoint ? `${landingPoint[0].toFixed(5)}, ${landingPoint[1].toFixed(5)}` : "N/A"}</td>
               </tr>
               <tr>
-                <td style={{fontWeight: 500, color: "#1976d2"}}>{getLabel(truckDeliveries.length + 4)} (HQ):</td>
+                <td style={{fontWeight: 500, color: "#1976d2"}}>{getLabel(optimizedRoutePath.length + 2)} (HQ):</td>
                 <td>{HQ.lat}, {HQ.lng}</td>
               </tr>
             </tbody>
