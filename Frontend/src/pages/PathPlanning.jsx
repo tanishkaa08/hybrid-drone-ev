@@ -97,63 +97,57 @@ function nearestNeighborRoute(hq, deliveries) {
   route.push([hq.lat, hq.lng]);
   return route;
 }
-function projectPointOnSegment(A, B, P) {
-  const toXY = ([lat, lng]) => {
-    const x = lng * Math.cos(toRad((A[0] + B[0]) / 2));
-    const y = lat;
-    return [x, y];
-  };
-  const [x1, y1] = toXY(A);
-  const [x2, y2] = toXY(B);
-  const [x0, y0] = toXY(P);
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  if (dx === 0 && dy === 0) return A;
-  const t = ((x0 - x1) * dx + (y0 - y1) * dy) / (dx * dx + dy * dy);
-  if (t < 0) return A;
-  if (t > 1) return B;
-  return [A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])];
-}
 
-// The new logic: first closest approach, not after the truck has passed!
-function findFirstClosestPointOnPolyline(polyline, deliveryLat, deliveryLng) {
-  let minDist = Infinity;
-  let closestPoint = null;
-  let closestIdx = 0;
-  let found = false;
+// ----------- OPTIMAL LAUNCH POINT LOGIC -----------
+function findOptimalLaunchPoint(polyline, deliveryLat, deliveryLng) {
+  let minMakespan = Infinity;
+  let bestPoint = null;
+  let bestIdx = 0;
+  const truckSpeed = 30; // km/h
+  const droneSpeed = 40; // km/h
+
+  // Precompute cumulative truck distances
+  let cumDist = [0];
+  for (let i = 1; i < polyline.length; i++) {
+    cumDist[i] = cumDist[i-1] + haversineDistance(
+      polyline[i-1][0], polyline[i-1][1], polyline[i][0], polyline[i][1]
+    );
+  }
 
   for (let i = 0; i < polyline.length - 1; i++) {
-    const A = polyline[i];
-    const B = polyline[i + 1];
-    const proj = projectPointOnSegment(A, B, [deliveryLat, deliveryLng]);
-    // Check if projection is actually between A and B
-    const isBetween =
-      Math.min(A[0], B[0]) <= proj[0] && proj[0] <= Math.max(A[0], B[0]) &&
-      Math.min(A[1], B[1]) <= proj[1] && proj[1] <= Math.max(A[1], B[1]);
-    const dist = haversineDistance(proj[0], proj[1], deliveryLat, deliveryLng);
-    if (isBetween && dist < minDist) {
-      minDist = dist;
-      closestPoint = proj;
-      closestIdx = i;
-      found = true;
-      // As soon as we find the first minimal, break (do not look for later occurrences)
-      break;
-    }
-  }
-  // If not found in-between, fallback to closest endpoint (A or B)
-  if (!found) {
-    minDist = Infinity;
-    for (let i = 0; i < polyline.length; i++) {
-      const pt = polyline[i];
-      const dist = haversineDistance(pt[0], pt[1], deliveryLat, deliveryLng);
-      if (dist < minDist) {
-        minDist = dist;
-        closestPoint = pt;
-        closestIdx = i;
+    // Try both endpoints and midpoint for each segment
+    const candidates = [
+      polyline[i],
+      [
+        (polyline[i][0] + polyline[i+1][0]) / 2,
+        (polyline[i][1] + polyline[i+1][1]) / 2
+      ]
+    ];
+    for (const pt of candidates) {
+      // Truck time to launch
+      let truckDistToLaunch = cumDist[i] + haversineDistance(polyline[i][0], polyline[i][1], pt[0], pt[1]);
+      let truckTimeToLaunch = (truckDistToLaunch / truckSpeed) * 60;
+
+      // Drone round trip time
+      let droneLeg = haversineDistance(pt[0], pt[1], deliveryLat, deliveryLng);
+      let droneTripTime = (2 * droneLeg / droneSpeed) * 60;
+
+      // Truck time after launch
+      let truckDistAfter = haversineDistance(pt[0], pt[1], polyline[i+1][0], polyline[i+1][1]) +
+        (cumDist[polyline.length - 1] - cumDist[i+1]);
+      let truckTimeAfter = (truckDistAfter / truckSpeed) * 60;
+
+      // Makespan: truck to launch + max(drone trip, truck finish after launch)
+      let makespan = truckTimeToLaunch + Math.max(droneTripTime, truckTimeAfter);
+
+      if (makespan < minMakespan) {
+        minMakespan = makespan;
+        bestPoint = pt;
+        bestIdx = i;
       }
     }
   }
-  return { point: closestPoint, idx: closestIdx };
+  return { point: bestPoint, idx: bestIdx, makespan: minMakespan };
 }
 
 export default function PathPlanning() {
@@ -221,8 +215,8 @@ export default function PathPlanning() {
 
   if (!trip || !droneDelivery) return <div style={{padding: 40}}>Loading trip...</div>;
 
-  // Use the new helper for launch/landing point:
-  const { point: launchPoint, idx: launchIdx } = findFirstClosestPointOnPolyline(
+  // --------- Use the optimal launch point logic ---------
+  const { point: launchPoint, idx: launchIdx } = findOptimalLaunchPoint(
     truckPolyline.length > 1 ? truckPolyline : optimizedNodeOrder,
     droneDelivery.latitude,
     droneDelivery.longitude
@@ -247,18 +241,14 @@ export default function PathPlanning() {
   let truckTimeToLaunch = 0;
   let truckDistToLaunch = 0;
   const polyline = truckPolyline.length > 1 ? truckPolyline : optimizedNodeOrder;
-  for (let i = 0; i < launchIdx; i++) {
-    truckDistToLaunch += haversineDistance(
-      polyline[i][0], polyline[i][1],
-      polyline[i+1][0], polyline[i+1][1]
+  // Find the actual truck distance to the launch point
+  let cumDist = [0];
+  for (let i = 1; i < polyline.length; i++) {
+    cumDist[i] = cumDist[i-1] + haversineDistance(
+      polyline[i-1][0], polyline[i-1][1], polyline[i][0], polyline[i][1]
     );
   }
-  if (launchIdx < polyline.length - 1) {
-    truckDistToLaunch += haversineDistance(
-      polyline[launchIdx][0], polyline[launchIdx][1],
-      launchPoint[0], launchPoint[1]
-    );
-  }
+  truckDistToLaunch = cumDist[launchIdx] + haversineDistance(polyline[launchIdx][0], polyline[launchIdx][1], launchPoint[0], launchPoint[1]);
   truckTimeToLaunch = (truckDistToLaunch / 30) * 60;
 
   // Truck time after launch point
@@ -269,12 +259,7 @@ export default function PathPlanning() {
       launchPoint[0], launchPoint[1],
       polyline[launchIdx + 1][0], polyline[launchIdx + 1][1]
     );
-    for (let i = launchIdx + 1; i < polyline.length - 1; i++) {
-      truckDistAfter += haversineDistance(
-        polyline[i][0], polyline[i][1],
-        polyline[i+1][0], polyline[i+1][1]
-      );
-    }
+    truckDistAfter += (cumDist[polyline.length - 1] - cumDist[launchIdx + 1]);
   }
   truckTimeAfter = (truckDistAfter / 30) * 60;
 
@@ -286,7 +271,7 @@ export default function PathPlanning() {
   const droneTripTime = (2 * droneLeg / 40) * 60; // 40 km/h
 
   // Total trip time
-  const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, 0) + truckTimeAfter;
+  const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, truckTimeAfter);
 
   // Emissions (truck only, hybrid)
   let truckOnlyDist = 0;
