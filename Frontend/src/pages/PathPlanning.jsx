@@ -1,5 +1,5 @@
-/* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable no-unused-vars */
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -9,6 +9,7 @@ import {
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import axios from "axios";
+import { Resizable } from "re-resizable";
 
 // Helper functions
 function FitBounds({ points }) {
@@ -44,8 +45,7 @@ const hqIcon = letterIcon("A", "#1976d2");
 const launchIcon = letterIcon("L", "#ffa000");
 const landingIcon = letterIcon("P", "#7b1fa2");
 
-// HQ set to Connaught Place, New Delhi
-const HQ = { lat: 28.6139, lng: 77.2090 };
+const HQ = { lat: 12.9716, lng: 77.5946 }; // Bangalore
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
 function toRad(x) { return (x * Math.PI) / 180; }
@@ -74,6 +74,8 @@ function formatTimeMinutes(minutes) {
   const rem = min % 60;
   return rem === 0 ? `${hr} hr` : `${hr} hr ${rem} min`;
 }
+
+// Nearest Neighbor TSP for truck route optimization
 function nearestNeighborRoute(hq, deliveries) {
   const unvisited = deliveries.slice();
   let route = [[hq.lat, hq.lng]];
@@ -98,38 +100,67 @@ function nearestNeighborRoute(hq, deliveries) {
   return route;
 }
 
-// ----------- Closest launch point logic -----------
-function findShortestDroneTripPoint(polyline, deliveryLat, deliveryLng) {
+// Find the closest point ANYWHERE along the truck route polyline to the drone delivery
+function closestPointOnPolyline(polyline, targetLat, targetLng, samplesPerSegment = 50) {
   let minDist = Infinity;
   let bestPoint = null;
   let bestIdx = 0;
-  // Try all vertices and midpoints
+  let bestFrac = 0;
   for (let i = 0; i < polyline.length - 1; i++) {
-    const candidates = [
-      polyline[i],
-      [
-        (polyline[i][0] + polyline[i+1][0]) / 2,
-        (polyline[i][1] + polyline[i+1][1]) / 2
-      ]
-    ];
-    for (const pt of candidates) {
-      const droneLeg = haversineDistance(pt[0], pt[1], deliveryLat, deliveryLng);
-      if (droneLeg < minDist) {
-        minDist = droneLeg;
-        bestPoint = pt;
+    const [lat1, lng1] = polyline[i];
+    const [lat2, lng2] = polyline[i + 1];
+    for (let t = 0; t <= samplesPerSegment; t++) {
+      const frac = t / samplesPerSegment;
+      const lat = lat1 + (lat2 - lat1) * frac;
+      const lng = lng1 + (lng2 - lng1) * frac;
+      const dist = haversineDistance(lat, lng, targetLat, targetLng);
+      if (dist < minDist) {
+        minDist = dist;
+        bestPoint = [lat, lng];
         bestIdx = i;
+        bestFrac = frac;
       }
     }
   }
-  // Also check the last vertex
-  const lastPt = polyline[polyline.length - 1];
-  const droneLegLast = haversineDistance(lastPt[0], lastPt[1], deliveryLat, deliveryLng);
-  if (droneLegLast < minDist) {
-    minDist = droneLegLast;
-    bestPoint = lastPt;
-    bestIdx = polyline.length - 1;
+  return { point: bestPoint, idx: bestIdx, frac: bestFrac };
+}
+
+// Calculate truck distance up to launch (including fractional segment)
+function truckDistanceToLaunch(polyline, launchIdx, launchFrac) {
+  let dist = 0;
+  for (let i = 1; i <= launchIdx; i++) {
+    dist += haversineDistance(
+      polyline[i - 1][0], polyline[i - 1][1],
+      polyline[i][0], polyline[i][1]
+    );
   }
-  return { point: bestPoint, idx: bestIdx };
+  if (launchFrac > 0) {
+    const [lat1, lng1] = polyline[launchIdx];
+    const [lat2, lng2] = polyline[launchIdx + 1];
+    const lat = lat1 + (lat2 - lat1) * launchFrac;
+    const lng = lng1 + (lng2 - lng1) * launchFrac;
+    dist += haversineDistance(lat1, lng1, lat, lng);
+  }
+  return dist;
+}
+
+// Calculate truck distance after launch (including fractional segment)
+function truckDistanceAfterLaunch(polyline, launchIdx, launchFrac) {
+  let dist = 0;
+  if (launchFrac < 1) {
+    const [lat1, lng1] = polyline[launchIdx];
+    const [lat2, lng2] = polyline[launchIdx + 1];
+    const lat = lat1 + (lat2 - lat1) * launchFrac;
+    const lng = lng1 + (lng2 - lng1) * launchFrac;
+    dist += haversineDistance(lat, lng, lat2, lng2);
+  }
+  for (let i = launchIdx + 2; i < polyline.length; i++) {
+    dist += haversineDistance(
+      polyline[i - 1][0], polyline[i - 1][1],
+      polyline[i][0], polyline[i][1]
+    );
+  }
+  return dist;
 }
 
 export default function PathPlanning() {
@@ -137,6 +168,7 @@ export default function PathPlanning() {
   const [truckPolyline, setTruckPolyline] = useState([]);
   const [loadingRoute, setLoadingRoute] = useState(false);
   const [routeError, setRouteError] = useState(null);
+  const [mapSize, setMapSize] = useState({ width: 700, height: 450 });
 
   const navigate = useNavigate();
 
@@ -149,7 +181,6 @@ export default function PathPlanning() {
     }
   }, []);
 
-  // Defensive: always define these, even if trip is null
   let droneDelivery = null;
   let truckDeliveries = [];
   let drone = null;
@@ -197,61 +228,28 @@ export default function PathPlanning() {
 
   if (!trip || !droneDelivery) return <div style={{padding: 40}}>Loading trip...</div>;
 
-  // --------- Use the closest launch point logic ---------
-  const { point: launchPoint, idx: launchIdx } = findShortestDroneTripPoint(
+  // --- TRUE HYBRID LAUNCH/LAND LOGIC ---
+  const { point: launchPoint, idx: launchIdx, frac: launchFrac } = closestPointOnPolyline(
     truckPolyline.length > 1 ? truckPolyline : optimizedNodeOrder,
     droneDelivery.latitude,
-    droneDelivery.longitude
+    droneDelivery.longitude,
+    50 // high precision
   );
   const landingPoint = launchPoint;
 
-  let traversalPoints = [
-    { label: "A", type: "HQ", coords: [HQ.lat, HQ.lng] },
-    ...optimizedNodeOrder.slice(1, -1).map((coords, i) => ({
-      label: getLabel(i + 1),
-      type: "Truck",
-      coords,
-      idx: i
-    })),
-    { label: getLabel(optimizedNodeOrder.length - 1), type: "Launch", coords: launchPoint },
-    { label: getLabel(optimizedNodeOrder.length), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] },
-    { label: getLabel(optimizedNodeOrder.length + 1), type: "Landing", coords: landingPoint },
-    { label: getLabel(optimizedNodeOrder.length + 2), type: "HQ", coords: [HQ.lat, HQ.lng] }
-  ];
-
-  // Calculate truck time to launch point
-  let truckTimeToLaunch = 0;
-  let truckDistToLaunch = 0;
   const polyline = truckPolyline.length > 1 ? truckPolyline : optimizedNodeOrder;
-  let cumDist = [0];
-  for (let i = 1; i < polyline.length; i++) {
-    cumDist[i] = cumDist[i-1] + haversineDistance(
-      polyline[i-1][0], polyline[i-1][1], polyline[i][0], polyline[i][1]
-    );
-  }
-  truckDistToLaunch = cumDist[launchIdx] + haversineDistance(polyline[launchIdx][0], polyline[launchIdx][1], launchPoint[0], launchPoint[1]);
-  truckTimeToLaunch = (truckDistToLaunch / 30) * 60;
+  const truckDistToLaunch = truckDistanceToLaunch(polyline, launchIdx, launchFrac);
+  const truckTimeToLaunch = (truckDistToLaunch / 30) * 60;
 
-  // Truck time after launch point
-  let truckTimeAfter = 0;
-  let truckDistAfter = 0;
-  if (launchIdx < polyline.length - 1) {
-    truckDistAfter += haversineDistance(
-      launchPoint[0], launchPoint[1],
-      polyline[launchIdx + 1][0], polyline[launchIdx + 1][1]
-    );
-    truckDistAfter += (cumDist[polyline.length - 1] - cumDist[launchIdx + 1]);
-  }
-  truckTimeAfter = (truckDistAfter / 30) * 60;
+  const truckDistAfter = truckDistanceAfterLaunch(polyline, launchIdx, launchFrac);
+  const truckTimeAfter = (truckDistAfter / 30) * 60;
 
-  // Drone round trip time (launch -> delivery -> launch)
   const droneLeg = haversineDistance(
     launchPoint[0], launchPoint[1],
     droneDelivery.latitude, droneDelivery.longitude
   );
   const droneTripTime = (2 * droneLeg / 40) * 60; // 40 km/h
 
-  // Total trip time
   const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, truckTimeAfter);
 
   // Emissions (truck only, hybrid)
@@ -280,6 +278,20 @@ export default function PathPlanning() {
   const hybridCarbon = miles(truckDist) * TRUCK_EMISSION_PER_MILE + miles(droneDistKm) * DRONE_EMISSION_PER_MILE;
   const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
 
+  // For visualization: Show all truck stops, launch, delivery, landing, HQ
+  let traversalPoints = [
+    { label: "A", type: "HQ", coords: [HQ.lat, HQ.lng] },
+    ...optimizedNodeOrder.slice(1, -1).map((coords, i) => ({
+      label: getLabel(i + 1),
+      type: "Truck",
+      coords,
+      idx: i
+    })),
+    { label: getLabel(optimizedNodeOrder.length - 1), type: "Launch", coords: launchPoint },
+    { label: getLabel(optimizedNodeOrder.length), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] },
+    { label: getLabel(optimizedNodeOrder.length + 1), type: "Landing", coords: landingPoint },
+    { label: getLabel(optimizedNodeOrder.length + 2), type: "HQ", coords: [HQ.lat, HQ.lng] }
+  ];
   const allPoints = traversalPoints.map(pt => pt.coords);
   const isMobile = window.innerWidth < 900;
 
@@ -301,18 +313,37 @@ export default function PathPlanning() {
         background: "#e3eafc",
         padding: isMobile ? 8 : 32
       }}>
-        <div style={{
-          width: isMobile ? "98vw" : "90vw",
-          maxWidth: 800,
-          height: isMobile ? "50vh" : "70vh",
-          minHeight: 340,
-          borderRadius: isMobile ? 12 : 18,
-          boxShadow: "0 4px 32px #0002",
-          overflow: "hidden",
-          background: "#fff",
-          border: "1px solid #dbeafe",
-          position: "relative"
-        }}>
+        <Resizable
+          minWidth={350}
+          minHeight={250}
+          maxWidth={1200}
+          maxHeight={900}
+          size={mapSize}
+          onResizeStop={(e, direction, ref, d) => {
+            setMapSize({
+              width: mapSize.width + d.width,
+              height: mapSize.height + d.height
+            });
+          }}
+          style={{
+            borderRadius: isMobile ? 12 : 18,
+            boxShadow: "0 4px 32px #0002",
+            overflow: "hidden",
+            background: "#fff",
+            border: "1px solid #dbeafe",
+            position: "relative"
+          }}
+          handleStyles={{
+            bottomRight: {
+              width: 24,
+              height: 24,
+              background: "rgba(0,0,0,0)",
+              cursor: "nwse-resize",
+              zIndex: 10,
+              userSelect: "none"
+            }
+          }}
+        >
           {routeError && <div style={{position:"absolute",top:10,left:10,color:"red",zIndex:999}}>{routeError}</div>}
           <MapContainer
             style={{ width: "100%", height: "100%" }}
@@ -378,7 +409,7 @@ export default function PathPlanning() {
               />
             )}
           </MapContainer>
-        </div>
+        </Resizable>
       </div>
       <div style={{
         flex: 1,
@@ -543,21 +574,30 @@ export default function PathPlanning() {
               }
             }}
           >Execute Delivery</button>
-          <button
-            style={{
-              background: "#fff",
-              color: "#1976d2",
-              border: "2px solid #1976d2",
-              borderRadius: 8,
-              padding: "12px 28px",
-              fontWeight: 600,
-              fontSize: "1.1em",
-              cursor: "pointer",
-              boxShadow: "0 2px 8px #1976d222",
-              transition: "background 0.2s"
-            }}
-            onClick={() => navigate("/newtrip")}
-          >Edit Delivery</button>
+         <button
+  style={{
+    background: "#fff",
+    color: "#1976d2",
+    border: "2px solid #1976d2",
+    borderRadius: 8,
+    padding: "12px 28px",
+    fontWeight: 600,
+    fontSize: "1.1em",
+    cursor: "pointer",
+    boxShadow: "0 2px 8px #1976d222",
+    transition: "background 0.2s"
+  }}
+  onClick={() => {
+    // Save the current trip as "editTrip" in localStorage
+    localStorage.setItem("editTrip", JSON.stringify(trip));
+    // Optionally, also set 'latestTrip' if your NewTrip form expects that
+    // localStorage.setItem("latestTrip", JSON.stringify(trip));
+    navigate("/newtrip");
+  }}
+>
+  Edit Delivery
+</button>
+
         </div>
       </div>
     </div>
