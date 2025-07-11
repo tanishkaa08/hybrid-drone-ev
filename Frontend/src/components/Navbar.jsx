@@ -8,7 +8,7 @@ export default function Navbar(){
         <Link to="/tripresults">Trips</Link>
         <Link to="/newtrip">New Trip</Link>
         <Link to="/pathplanning">Path Planning</Link>
-        <Link to="/">Drones</Link>
+        <Link to="/">Add Drone</Link>
       </div>
     </nav>
   );
