@@ -31,6 +31,66 @@ export default function NewTrip() {
     setDel(updated);
   };
 
+  const handleArrowKeys = (e, idx) => {
+    const val = del[idx].coordinates || '';
+    let [lat, lng] = val.split(',').map(Number);
+    if (isNaN(lat)) lat = 0;
+    if (isNaN(lng)) lng = 0;
+    let changed = false;
+    const step = 0.0001;
+    switch (e.key) {
+      case 'ArrowUp':
+        lat += step; changed = true; break;
+      case 'ArrowDown':
+        lat -= step; changed = true; break;
+      case 'ArrowRight':
+        lng += step; changed = true; break;
+      case 'ArrowLeft':
+        lng -= step; changed = true; break;
+      default: break;
+    }
+    if (changed) {
+      e.preventDefault();
+      setField(idx, 'coordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+    }
+  };
+
+  const handleTableKeyDown = (e, rowIdx, colIdx) => {
+    const numRows = del.length;
+    const numCols = 2; // weight, coordinates
+    let nextRow = rowIdx;
+    let nextCol = colIdx;
+
+    switch (e.key) {
+      case 'ArrowDown':
+        nextRow = Math.min(rowIdx + 1, numRows - 1);
+        break;
+      case 'ArrowUp':
+        nextRow = Math.max(rowIdx - 1, 0);
+        break;
+      case 'ArrowRight':
+        nextCol = Math.min(colIdx + 1, numCols - 1);
+        break;
+      case 'ArrowLeft':
+        nextCol = Math.max(colIdx - 1, 0);
+        break;
+      case 'Enter':
+        if (colIdx < numCols - 1) {
+          nextCol = colIdx + 1;
+        } else if (rowIdx < numRows - 1) {
+          nextRow = rowIdx + 1;
+          nextCol = 0;
+        }
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    const nextId = `input-${nextRow}-${nextCol === 0 ? 'weight' : 'coordinates'}`;
+    const nextElem = document.getElementById(nextId);
+    if (nextElem) nextElem.focus();
+  };
+
   const optimizeTrip = (deliveries) => {
     let best = null;
 
@@ -98,10 +158,18 @@ export default function NewTrip() {
 
   const submit = (e) => {
     e.preventDefault();
-    const deliveries = del.map(d => ({
-      ...d,
-      weight: Number(d.weight)
-    }));
+    const deliveries = del.map(d => {
+      let lat = '', lng = '';
+      if (d.coordinates) {
+        [lat, lng] = d.coordinates.split(',').map(Number);
+      }
+      return {
+        ...d,
+        latitude: lat,
+        longitude: lng,
+        weight: Number(d.weight)
+      };
+    });
     const trip = optimizeTrip(deliveries);
 
     if (trip) {
@@ -134,16 +202,38 @@ export default function NewTrip() {
           <thead>
             <tr>
               <th>Payload (kg)</th>
-              <th>Latitude</th>
-              <th>Longitude</th>
+              <th>Coordinates</th>
             </tr>
           </thead>
           <tbody>
             {del.map((delivery, i) => (
               <tr key={i}>
-                <td><input type="number" min="0" placeholder="Weight" required className="small-input" value={delivery.weight} onChange={e => setField(i, 'weight', e.target.value)} /></td>
-                <td><input placeholder="Latitude" required className="small-input" value={delivery.latitude} onChange={e => setField(i, 'latitude', e.target.value)} /></td>
-                <td><input placeholder="Longitude" required className="small-input" value={delivery.longitude} onChange={e => setField(i, 'longitude', e.target.value)} /></td>
+                <td>
+                  <input
+                    id={`input-${i}-weight`}
+                    name={`input-${i}-weight`}
+                    type="number"
+                    min="0"
+                    placeholder="Weight"
+                    required
+                    className="small-input"
+                    value={delivery.weight}
+                    onChange={e => setField(i, 'weight', e.target.value)}
+                    onKeyDown={e => handleTableKeyDown(e, i, 0)}
+                  />
+                </td>
+                <td>
+                  <input
+                    id={`input-${i}-coordinates`}
+                    name={`input-${i}-coordinates`}
+                    placeholder="lat, lng"
+                    required
+                    className="small-input"
+                    value={delivery.coordinates || ''}
+                    onChange={e => setField(i, 'coordinates', e.target.value)}
+                    onKeyDown={e => handleTableKeyDown(e, i, 1)}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>
