@@ -44,7 +44,13 @@ npm install
 npm install tailwindcss @tailwindcss/vite
 npm run dev
 ```
+### 📄 Create `.env` File
 
+Create a `.env` file in `/Frontend` :
+
+```
+VITE_MAPBOX_TOKEN=pk.eyJ1IjoidGFuaXNoa2FhOCIsImEiOiJjbWN1eG1tZXowMXJkMmtxb3I3c3M5amFuIn0.VIDOJd_VBz3P7SOth02rKA
+```
 > Make sure Tailwind is properly configured in `tailwind.config.js` and `index.css`
 
 ---

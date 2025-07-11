@@ -1,3 +1,6 @@
+body, #root {
+  overflow-x: hidden !important;
+}
 body {
   margin: 0;
   background: #f8fafb;
@@ -329,4 +332,9 @@ h1 {
 .rounded-btn.secondary {
   background-color: #e0e0e0;
   color: #333;
+}
+
+::-webkit-scrollbar:horizontal {
+  display: none !important;
+  height: 0 !important;
 }
