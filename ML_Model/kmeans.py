@@ -45,6 +45,7 @@ def find_outlier_index(coordinates: List[Tuple[float, float]]) -> int:
     distances = np.linalg.norm(coords_scaled - np.mean(coords_scaled, axis=0), axis=1)
     return int(np.argmax(distances))
   
+  # pyright: reportArgumentType=false
   kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
   cluster_labels = kmeans.fit_predict(coords_scaled)
   
@@ -74,29 +75,36 @@ def find_outlier_index(coordinates: List[Tuple[float, float]]) -> int:
     return int(np.argmax(distances))
 
 if __name__ == "__main__":
-  if len(sys.argv) != 2:
-    print("Usage: python kmeans.py <coordinates.json>")
-    print("\nJSON file should contain coordinates in one of these formats:")
-    print("Format 1: [{\"lat\": 28.6139, \"lon\": 77.209}, ...]")
-    print("Format 2: [[28.6139, 77.209], ...]")
-    sys.exit(1)
+  import argparse
+  parser = argparse.ArgumentParser()
+  parser.add_argument('filename', help='JSON file with coordinates')
+  parser.add_argument('--quiet', action='store_true', help='Print only the outlier index')
+  args = parser.parse_args()
 
-  filename = sys.argv[1]
-  print("KMeans Outlier Detection")
-  print("=" * 30)
-  print(f"Reading coordinates from: {filename}")
-  
+  filename = args.filename
+  quiet = args.quiet
+
   coordinates = load_coordinates_from_json(filename)
-  
-  print(f"Loaded {len(coordinates)} coordinates:")
-  for i, coord in enumerate(coordinates):
-    print(f"  {i}: {coord}")
-  
+
   try:
     outlier_index = find_outlier_index(coordinates)
-    print(f"\nOutlier index: {outlier_index}")
-    print(f"Outlier coordinates: {coordinates[outlier_index]}")
-          
+    # If outlier is HQ (index 0), pick next most distant point
+    if outlier_index == 0 and len(coordinates) > 1:
+      coords_array = np.array(coordinates)
+      scaler = StandardScaler()
+      coords_scaled = scaler.fit_transform(coords_array)
+      distances = np.linalg.norm(coords_scaled - np.mean(coords_scaled, axis=0), axis=1)
+      outlier_index = 1 + np.argmax(distances[1:])
+    if quiet:
+      print(outlier_index)
+    else:
+      print("KMeans Outlier Detection")
+      print("=" * 30)
+      print(f"Loaded {len(coordinates)} coordinates:")
+      for i, coord in enumerate(coordinates):
+        print(f"  {i}: {coord}")
+      print(f"\nOutlier index: {outlier_index}")
+      print(f"Outlier coordinates: {coordinates[outlier_index]}")
   except ValueError as e:
     print(f"Error: {e}")
     sys.exit(1)

@@ -191,14 +191,24 @@ export default function PathPlanning() {
   let truckDeliveries = [];
   let drone = null;
   let optimizedNodeOrder = [[HQ.lat, HQ.lng], [HQ.lat, HQ.lng]];
+  let mlPredictedIndex = null;
+  let mlPredictedDelivery = null;
   if (trip) {
-    droneDelivery = trip.droneDelivery
+    mlPredictedIndex = trip.mlPredictedIndex;
+    mlPredictedDelivery = trip.mlPredictedDelivery;
+    droneDelivery = mlPredictedDelivery
       ? {
-          ...trip.droneDelivery,
-          latitude: Number(trip.droneDelivery.latitude),
-          longitude: Number(trip.droneDelivery.longitude)
+          ...mlPredictedDelivery,
+          latitude: Number(mlPredictedDelivery.latitude),
+          longitude: Number(mlPredictedDelivery.longitude)
         }
-      : null;
+      : (trip.droneDelivery
+        ? {
+            ...trip.droneDelivery,
+            latitude: Number(trip.droneDelivery.latitude),
+            longitude: Number(trip.droneDelivery.longitude)
+          }
+        : null);
     truckDeliveries = (trip.truckDeliveries || []).map(del => ({
       ...del,
       latitude: Number(del.latitude),
@@ -359,24 +369,25 @@ export default function PathPlanning() {
   const allDeliveries = [droneDelivery, ...truckDeliveries];
   allDeliveries.forEach((del) => {
     const next = { lat: del.latitude, lng: del.longitude };
-    truckOnlyDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng);
+    truckOnlyDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng); // in km
     prev = next;
   });
-  truckOnlyDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
+  truckOnlyDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng); // in km
 
-  const droneDistKm = droneLeg * 2;
+  const droneDistKm = droneLeg * 2; // round trip in km
   let truckDist = 0;
   for (let i = 0; i < polyline.length - 1; i++) {
     truckDist += haversineDistance(
       polyline[i][0], polyline[i][1],
       polyline[i+1][0], polyline[i+1][1]
-    );
+    ); // in km
   }
 
-  const TRUCK_EMISSION_PER_MILE = 1.2;
-  const DRONE_EMISSION_PER_MILE = 0.1;
-  const truckOnlyCarbon = miles(truckOnlyDist) * TRUCK_EMISSION_PER_MILE;
-  const hybridCarbon = miles(truckDist) * TRUCK_EMISSION_PER_MILE + miles(droneDistKm) * DRONE_EMISSION_PER_MILE;
+  const TRUCK_EMISSION_PER_KM = 0.746; // 1.2 miles = 1.60934 km, so 1.2/1.60934 ≈ 0.746 kg/km
+  const DRONE_EMISSION_PER_KM = 0.062; // 0.1 miles = 0.160934 km, so 0.1/1.60934 ≈ 0.062 kg/km
+
+  const truckOnlyCarbon = truckOnlyDist * TRUCK_EMISSION_PER_KM;
+  const hybridCarbon = (truckDist * TRUCK_EMISSION_PER_KM) + (droneDistKm * DRONE_EMISSION_PER_KM);
   const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
 
   return (
@@ -438,7 +449,32 @@ export default function PathPlanning() {
             fontWeight: 700,
             color: "#1976d2"
           }}>{formatTimeMinutes(totalTripTime)}</div>
-      </div>
+        </div>
+        
+        {mlPredictedDelivery && (
+          <div style={{
+            background: "#fff3e0",
+            borderRadius: 12,
+            padding: "16px 20px",
+            marginBottom: 18,
+            boxShadow: "0 2px 8px #0001",
+            border: "2px solid #ff9800"
+          }}>
+            <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 4, color: "#e65100"}}>
+              ML model Prediction
+            </div>
+            <div style={{fontSize: "1em", color: "#666"}}>
+              Delivery at <strong style={{color: "#e65100"}}>{mlPredictedDelivery.latitude}, {mlPredictedDelivery.longitude}</strong> was selected by AI for drone delivery
+            </div>
+           
+          </div>
+        )}
+        {!mlPredictedDelivery && (
+          <div style={{background: "#ffeaea", borderRadius: 12, padding: "16px 20px", marginBottom: 18, border: "2px solid #e57373"}}>
+            <div style={{fontWeight: 600, color: "#d32f2f"}}>No ML Prediction</div>
+            <div style={{color: "#888"}}>Fallback logic was used for drone delivery selection.</div>
+          </div>
+        )}
         <div style={{
           background: "#f6f8fa",
           borderRadius: 12,
@@ -651,11 +687,15 @@ export default function PathPlanning() {
                 pt.type === "DroneDelivery" ? droneIcon : hqIcon
               }
             >
-              <Tooltip direction="top" offset={[0, -10]} opacity={1} permanent>
+              <Tooltip direction="top" offset={[0, -10]} opacity={1}>
                 <span style={{ fontWeight: "bold", fontSize: 15 }}>{pt.label}</span>
               </Tooltip>
               <Popup>
                 <b>{pt.label}</b> - {pt.type}
+                <br />
+                <span style={{ fontSize: 13, color: "#333" }}>
+                  {pt.coords[0].toFixed(5)}, {pt.coords[1].toFixed(5)}
+                </span>
                 {pt.type === "DroneDelivery" && trip.drone && (
                   <div>Drone ID Used: <b>{trip.drone.droneId}</b></div>
                 )}

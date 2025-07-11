@@ -175,6 +175,20 @@ def display_results(input_features: Dict[str, float], predicted_time: float, sel
     
     print("\n" + "="*50)
 
+def output_json(input_features, predicted_time, selected_drone):
+    result = {
+        "predicted_time_seconds": predicted_time,
+        "predicted_time_minutes": predicted_time / 60,
+        "drone": {
+            "drone_id": selected_drone.drone_id,
+            "payload_capacity": selected_drone.payload_capacity,
+            "battery_capacity": selected_drone.battery_capacity,
+            "battery_percent": selected_drone.battery_percent
+        },
+        "input_features": input_features
+    }
+    print(json.dumps(result))
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python xgb.py <input.json>")
@@ -205,3 +219,4 @@ if __name__ == "__main__":
 
     predicted_time = predict_time(model, feature_names, input_features)
     display_results(input_features, predicted_time, best_drone)
+    output_json(input_features, predicted_time, best_drone)

@@ -122,19 +122,126 @@ export default function NewTrip() {
     return best;
   };
 
-  const submit = (e) => {
+  const optimizeTripWithML = (deliveries, hqLat, hqLng, predictedDroneIndex) => {
+    const HQ = { lat: Number(hqLat), lng: Number(hqLng) };
+    
+    // Validate predicted index
+    if (predictedDroneIndex < 0 || predictedDroneIndex >= deliveries.length) {
+      console.warn('Invalid ML prediction index, falling back to original optimization');
+      return optimizeTrip(deliveries, hqLat, hqLng);
+    }
+    
+    const droneDelivery = deliveries[predictedDroneIndex];
+    const truckDeliveries = deliveries.filter((_, idx) => idx !== predictedDroneIndex);
+    
+    const availableDrones = drones.filter(d =>
+      d.available &&
+      Number(d.payload) >= Number(droneDelivery.weight) &&
+      Number(d.currentBattery) >= 20
+    );
+    
+    if (!availableDrones.length) {
+      console.warn('No suitable drone available for ML-predicted delivery, falling back to original optimization');
+      return optimizeTrip(deliveries, hqLat, hqLng);
+    }
+    
+    const drone = availableDrones[0];
+    const droneDist = getDistance(HQ.lat, HQ.lng, Number(droneDelivery.latitude), Number(droneDelivery.longitude)) * 2;
+    
+    let truckDist = 0;
+    let prev = HQ;
+    truckDeliveries.forEach(del => {
+      truckDist += getDistance(prev.lat, prev.lng, Number(del.latitude), Number(del.longitude));
+      prev = { lat: Number(del.latitude), lng: Number(del.longitude) };
+    });
+    if (truckDeliveries.length) {
+      truckDist += getDistance(prev.lat, prev.lng, HQ.lat, HQ.lng);
+    }
+    
+    const truckOnlyDist = deliveries.reduce((sum, del, idx) => {
+      const from = idx === 0 ? HQ : {
+        lat: Number(deliveries[idx - 1].latitude),
+        lng: Number(deliveries[idx - 1].longitude)
+      };
+      return sum + getDistance(from.lat, from.lng, Number(del.latitude), Number(del.longitude));
+    }, 0) + getDistance(Number(deliveries[deliveries.length - 1].latitude), Number(deliveries[deliveries.length - 1].longitude), HQ.lat, HQ.lng);
+    
+    const truckOnlyCarbon = truckOnlyDist * TRUCK_EMISSION_PER_MILE;
+    const hybridCarbon = (truckDist * TRUCK_EMISSION_PER_MILE) + (droneDist * DRONE_EMISSION_PER_MILE);
+    const carbonReduction = ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100;
+    const truckTime = (truckDist / 30) * 60;
+    const droneTime = (droneDist / 40) * 60;
+    const totalTime = Math.max(truckTime, droneTime);
+    
+    return {
+      drone,
+      droneDelivery,
+      truckDeliveries,
+      droneDist: droneDist.toFixed(2),
+      truckDist: truckDist.toFixed(2),
+      carbonReduction: carbonReduction.toFixed(1),
+      totalTime: totalTime.toFixed(1),
+      hybridCarbon: hybridCarbon.toFixed(2),
+      truckOnlyCarbon: truckOnlyCarbon.toFixed(2),
+      truckOnlyTime: (truckOnlyDist / 30 * 60).toFixed(1),
+      deliveries,
+      hqLat: Number(hqLat),
+      hqLng: Number(hqLng),
+      createdAt: new Date().toISOString(),
+      mlPredictedIndex: predictedDroneIndex
+    };
+  };
+
+  const submit = async (e) => {
     e.preventDefault();
     const deliveries = del.map(d => ({
       ...d,
       weight: Number(d.weight)
     }));
-    const trip = optimizeTrip(deliveries, hqLat, hqLng);
-    if (trip) {
-      localStorage.setItem('latestTrip', JSON.stringify(trip));
-      localStorage.removeItem("editTrip");
-      nav('/pathplanning');
-    } else {
-      alert('No feasible drone delivery found. All deliveries assigned to truck.');
+    
+    try {
+      // Get ML prediction for drone delivery
+      const hq = { latitude: Number(hqLat), longitude: Number(hqLng) };
+      const mlResponse = await fetch('/api/ml/predict-drone-delivery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hq, deliveries })
+      });
+      
+      if (!mlResponse.ok) {
+        throw new Error('ML prediction failed');
+      }
+      
+      const mlData = await mlResponse.json();
+      const predictedDroneIndex = mlData.data.droneIndex;
+      
+      let trip;
+      if (typeof predictedDroneIndex === 'number' && predictedDroneIndex >= 0 && predictedDroneIndex < deliveries.length) {
+        trip = optimizeTripWithML(deliveries, hqLat, hqLng, predictedDroneIndex);
+        trip.mlPredictedDelivery = deliveries[predictedDroneIndex];
+      } else {
+        trip = optimizeTrip(deliveries, hqLat, hqLng);
+        trip.mlPredictedDelivery = null;
+      }
+      if (trip) {
+        localStorage.setItem('latestTrip', JSON.stringify(trip));
+        localStorage.removeItem("editTrip");
+        nav('/pathplanning');
+      } else {
+        alert('No feasible drone delivery found. All deliveries assigned to truck.');
+      }
+    } catch (error) {
+      console.error('ML prediction error:', error);
+      // Fallback to original optimization if ML fails
+      const trip = optimizeTrip(deliveries, hqLat, hqLng);
+      trip.mlPredictedDelivery = null;
+      if (trip) {
+        localStorage.setItem('latestTrip', JSON.stringify(trip));
+        localStorage.removeItem("editTrip");
+        nav('/pathplanning');
+      } else {
+        alert('No feasible drone delivery found. All deliveries assigned to truck.');
+      }
     }
   };
 
@@ -165,6 +272,16 @@ export default function NewTrip() {
     const ref = deliveryRefs.current[nextRow]?.[nextCol];
     if (ref && ref.current) ref.current.focus();
   };
+
+  async function getDroneDeliveryIndex(hq, deliveries) {
+    const res = await fetch('/api/ml/predict-drone-delivery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hq, deliveries })
+    });
+    const data = await res.json();
+    return data.droneIndex; // index in deliveries array
+  }
 
   return (
     <div className="container new-trip-container">
