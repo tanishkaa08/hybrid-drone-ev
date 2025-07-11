@@ -199,9 +199,8 @@ if __name__ == "__main__":
     model, feature_names = load_model_and_features()
     input_features = load_input_from_json(filename)
 
-    # Load drones list and select the best drone
     drones = load_drones_list()
-    payload_weight_kg = input_features['payload'] / 1000 # Convert grams to kilograms
+    payload_weight_kg = input_features['payload'] / 1000
     best_drone = select_best_drone(drones, payload_weight_kg)
 
     predicted_time = predict_time(model, feature_names, input_features)
