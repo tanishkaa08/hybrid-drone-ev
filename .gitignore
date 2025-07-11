@@ -1,9 +1,11 @@
 # Large data files
-*.csv
-*.pkl
 *.model
 *.h5
 *.hdf5
+
+# Allow specific model and data files
+!ML_Model/*.csv
+!ML_Model/*.pkl
 
 # Python
 __pycache__/
@@ -33,6 +35,12 @@ venv/
 env/
 ENV/
 ml_model/
+ML_Model/ml_model/
+
+# Allow ML_Model directory and its contents
+!ML_Model/
+# But exclude the virtual environment subdirectory
+ML_Model/ml_model/
 
 # IDE
 .vscode/
