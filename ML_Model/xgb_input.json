@@ -1,0 +1,10 @@
+{
+  "distance": 1500.0,
+  "wind_speed": 5.2,
+  "position_x": -122.4194,
+  "position_y": 37.7749,
+  "position_z": 100.0,
+  "speed": 15.0,
+  "payload": 1000.0,
+  "angular": 0.5
+}

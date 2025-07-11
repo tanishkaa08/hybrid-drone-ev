@@ -1,0 +1,41 @@
+# Python virtual environments
+ML_Model/ml_model/
+venv/
+env/
+.env
+.venv
+
+# Large data files
+*.csv
+ML_Model/flights.csv
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node modules
+node_modules/
+
+# Build directories
+build/
+dist/
+*.egg-info/ 

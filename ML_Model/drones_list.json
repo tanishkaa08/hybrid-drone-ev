@@ -1,0 +1,32 @@
+[
+  {
+    "drone_id": "DRONE_001",
+    "payload_capacity": 2.5,
+    "battery_capacity": 6000,
+    "battery_percent": 85
+  },
+  {
+    "drone_id": "DRONE_002", 
+    "payload_capacity": 1.8,
+    "battery_capacity": 4500,
+    "battery_percent": 92
+  },
+  {
+    "drone_id": "DRONE_003",
+    "payload_capacity": 1.2,
+    "battery_capacity": 8000,
+    "battery_percent": 42
+  },
+  {
+    "drone_id": "DRONE_004",
+    "payload_capacity": 1.2,
+    "battery_capacity": 3500,
+    "battery_percent": 95
+  },
+  {
+    "drone_id": "DRONE_005",
+    "payload_capacity": 4.0,
+    "battery_capacity": 10000,
+    "battery_percent": 88
+  }
+]
