@@ -670,7 +670,7 @@ export default function PathPlanning() {
     try {
       await axios.post('/api/trips/createTrip', trip);
 
-      // Mark the drone as unavailable locally
+     
       if (trip.drone) {
         trip.drone.available = false;
       }
