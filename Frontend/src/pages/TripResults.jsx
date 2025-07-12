@@ -598,6 +598,18 @@ export default function TripResults() {
     );
   }, 0);
 
+  // Calculate truck-only total time (all deliveries by truck, in optimized order)
+  let truckOnlyTotalTime = 0;
+  if (optimizedNodeOrder.length > 1) {
+    for (let i = 1; i < optimizedNodeOrder.length; i++) {
+      const [latA, lngA] = optimizedNodeOrder[i - 1];
+      const [latB, lngB] = optimizedNodeOrder[i];
+      const dist = haversineDistance(latA, lngA, latB, lngB);
+      truckOnlyTotalTime += (dist / 30) * 60; // 30 km/h truck speed
+    }
+  }
+  const timeSaved = truckOnlyTotalTime - totalTripTime;
+
   console.log(`[TripResults] Total trip time: ${totalTripTime} min`);
   console.log(`[TripResults] Traversal points:`, traversalPoints.map(pt => ({ type: pt.type, coords: pt.coords })));
   console.log(`[TripResults] xgbResult:`, xgbResult);
@@ -667,6 +679,9 @@ export default function TripResults() {
             fontWeight: 700,
             color: "#d32f2f"
           }}>{isFinite(Number(trip.totalTripTime)) ? formatTimeMinutes(Number(trip.totalTripTime)) : 'N/A'}</div>
+          <div style={{ fontSize: "1em", color: "#1976d2", marginTop: 6 }}>
+            <b>Time Saved:</b> {timeSaved > 0 ? formatTimeMinutes(timeSaved) : '0 sec'}
+          </div>
         </div>
         
         
