@@ -411,7 +411,7 @@ export default function TripResults() {
         }}>
           <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 4}}>
             Estimated Time
-            <span style={{ fontSize: 14, marginLeft: 8, color: "#d32f2f" }}>�� ML Enhanced</span>
+            <span style={{ fontSize: 14, marginLeft: 8, color: "#d32f2f" }}>ML Enhanced</span>
           </div>
           <div style={{
             fontSize: "2em",
