@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import ApiError from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/AsyncHandler.js";
+import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,17 +18,14 @@ const predictDroneDelivery = asyncHandler(async (req, res) => {
   }
 
   try {
-    // Prepare coordinates for the ML model: HQ first, then all deliveries
     const coordinates = [
       { lat: hq.latitude, lon: hq.longitude },
       ...deliveries.map(d => ({ lat: d.latitude, lon: d.longitude }))
     ];
 
-    // Write coordinates to the shared JSON file
     const jsonPath = path.join(__dirname, '../../../ML_Model/kmeans_input.json');
     fs.writeFileSync(jsonPath, JSON.stringify(coordinates, null, 2));
 
-    // Call the Python k-means script with --quiet
     const pythonScriptPath = path.join(__dirname, '../../../ML_Model/kmeans.py');
     return new Promise((resolve, reject) => {
       const pythonProcess = spawn('python', [pythonScriptPath, jsonPath, '--quiet']);
@@ -92,6 +90,68 @@ const predictDroneDelivery = asyncHandler(async (req, res) => {
   }
 });
 
+ const saveDronesList = async (req, res) => {
+  try {
+   
+    const response = await axios.get('http://localhost:8000/api/v1/drones/getalldrones');
+    const drones = response.data;
+
+    const dronesPath = path.join(__dirname, '../../../ML_Model/drones_list.json');
+    fs.writeFileSync(dronesPath, JSON.stringify(drones, null, 2));
+    res.status(200).json({ message: "Drones list saved successfully!" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+ const predictDroneTime = async (req, res) => {
+  try {
+    const mlInput = req.body;
+    const inputPath = path.join(__dirname, '../../../ML_Model/xgb_input.json');
+    fs.writeFileSync(inputPath, JSON.stringify(mlInput, null, 2));
+
+    const pythonScriptPath = path.join(__dirname, '../../../ML_Model/xjb.py');
+    const pythonProcess = spawn('python', [pythonScriptPath, inputPath]);
+
+    let output = '';
+    let errorOutput = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error('Python script error:', errorOutput);
+        return res.status(500).json({ error: `ML model failed with code ${code}` });
+      }
+
+      let result = null;
+      try {
+        const lines = output.trim().split('\n').filter(line => line.trim() !== '');
+        result = JSON.parse(lines[lines.length - 1]);
+      } catch (e) {
+        return res.status(500).json({ error: "Failed to parse ML output", raw: output });
+      }
+
+      res.status(200).json({ result });
+    });
+
+    pythonProcess.on('error', (err) => {
+      res.status(500).json({ error: `Failed to execute Python script: ${err.message}` });
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 export {
-  predictDroneDelivery
-}; 
+  predictDroneDelivery,
+  saveDronesList,
+  predictDroneTime
+};
