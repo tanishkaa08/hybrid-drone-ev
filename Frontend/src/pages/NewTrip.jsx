@@ -203,6 +203,8 @@ export default function NewTrip() {
     try {
       // KMeans call (already present)
       const hq = { latitude: Number(hqLat), longitude: Number(hqLng) };
+      // Before calling the ML API (wherever the ML API is called, e.g., in optimizeTripWithML or submit)
+      console.log("[ML INPUT] Deliveries:", deliveries, "HQ:", hqLat, hqLng, "Drones:", drones);
       const mlResponse = await fetch('/api/ml/predict-drone-delivery', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

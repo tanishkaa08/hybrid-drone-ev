@@ -331,22 +331,18 @@ export default function PathPlanning() {
     const [latA, lngA] = ptA;
     const [latB, lngB] = ptB;
     const dist = haversineDistance(latA, lngA, latB, lngB);
-    
-    // If this is a drone segment (Launch to DroneDelivery or DroneDelivery to Landing), use ML prediction
+    // Use ML time (predicted_time_minutes or time) for each drone segment (no division)
+    const mlMinutes = xgbResult && (xgbResult.predicted_time_minutes ?? xgbResult.time);
     if ((typeA === "Launch" && typeB === "DroneDelivery") || 
         (typeA === "DroneDelivery" && typeB === "Landing")) {
-      // Use ML predicted time if available, otherwise fallback to calculated time
-      if (xgbResult && xgbResult.predicted_time_minutes) {
-        return Number(xgbResult.predicted_time_minutes);
+      if (mlMinutes) {
+        return Number(mlMinutes);
       }
       return (dist / 40) * 60; // fallback to calculated time
     }
-    
-    // If either point is Launch, DroneDelivery, or Landing, use drone speed (40 km/h)
     if (["Launch", "DroneDelivery", "Landing"].includes(typeA) || ["Launch", "DroneDelivery", "Landing"].includes(typeB)) {
       return (dist / 40) * 60; // minutes
     }
-    // Otherwise, truck speed (30 km/h)
     return (dist / 30) * 60; // minutes
   }
 
@@ -399,7 +395,15 @@ export default function PathPlanning() {
   // Use ML predicted time if available, otherwise calculate based on distance
   const droneTripTime = xgbResult && xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes) : (2 * droneLeg / 40) * 60;
 
-  const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, truckTimeAfter);
+  // Calculate total trip time as the sum of all segment times in the traversal order
+  const totalTripTime = traversalPoints.slice(0, -1).reduce((sum, pt, idx) => {
+    return sum + getSegmentTime(
+      traversalPoints[idx].coords,
+      traversalPoints[idx + 1].coords,
+      traversalPoints[idx].type,
+      traversalPoints[idx + 1].type
+    );
+  }, 0);
 
   // Emissions (truck only, hybrid)
   let truckOnlyDist = 0;
@@ -424,9 +428,29 @@ export default function PathPlanning() {
   const TRUCK_EMISSION_PER_KM = 0.746; // 1.2 miles = 1.60934 km, so 1.2/1.60934 ≈ 0.746 kg/km
   const DRONE_EMISSION_PER_KM = 0.062; // 0.1 miles = 0.160934 km, so 0.1/1.60934 ≈ 0.062 kg/km
 
-  const truckOnlyCarbon = truckOnlyDist * TRUCK_EMISSION_PER_KM;
-  const hybridCarbon = (truckDist * TRUCK_EMISSION_PER_KM) + (droneDistKm * DRONE_EMISSION_PER_KM);
-  const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
+  // Calculate total distance if all deliveries are done by truck
+  let allTruckDist = 0;
+  let prevTruck = HQ;
+  allDeliveries.forEach((del) => {
+    allTruckDist += haversineDistance(prevTruck.lat, prevTruck.lng, del.latitude, del.longitude);
+    prevTruck = { lat: del.latitude, lng: del.longitude };
+  });
+  allTruckDist += haversineDistance(prevTruck.lat, prevTruck.lng, HQ.lat, HQ.lng);
+  const allTruckCarbon = allTruckDist * TRUCK_EMISSION_PER_KM;
+
+  // Calculate hybrid: 1 drone delivery (from launch/landing), rest by truck
+  let hybridDroneDist = 2 * haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude); // round trip for drone
+  let hybridTruckDist = 0;
+  let prevHybrid = HQ;
+  truckDeliveries.forEach(del => {
+    hybridTruckDist += haversineDistance(prevHybrid.lat, prevHybrid.lng, del.latitude, del.longitude);
+    prevHybrid = { lat: del.latitude, lng: del.longitude };
+  });
+  hybridTruckDist += haversineDistance(prevHybrid.lat, prevHybrid.lng, HQ.lat, HQ.lng);
+  const hybridCarbon = (hybridTruckDist * TRUCK_EMISSION_PER_KM) + (hybridDroneDist * DRONE_EMISSION_PER_KM);
+
+  // Carbon reduction
+  const carbonReduction = allTruckCarbon > 0 ? ((allTruckCarbon - hybridCarbon) / allTruckCarbon) * 100 : 0;
 
   return (
     <div style={{
@@ -466,7 +490,7 @@ export default function PathPlanning() {
           <div style={{ fontSize: "0.97em", color: "#666" }}>
             <span style={{marginRight: 16}}>
               <span style={{fontWeight: 500}}>Truck Only: </span>
-              {truckOnlyCarbon.toFixed(2)} kg CO₂
+              {allTruckCarbon.toFixed(2)} kg CO₂
             </span>
             <span>
               <span style={{fontWeight: 500}}>Hybrid: </span>
@@ -585,9 +609,9 @@ export default function PathPlanning() {
                                              (traversalPoints[idx].type === "DroneDelivery" && traversalPoints[idx + 1].type === "Landing");
                         const isMLPrediction = isDroneSegment && xgbResult && xgbResult.predicted_time_minutes;
                         return isNaN(t) ? "" : (
-                          <span style={{ color: isMLPrediction ? "#d32f2f" : "#1976d2" }}>
+                          <span style={{ color: isMLPrediction ? "#d32f2f" : "#1976d2", fontWeight: isMLPrediction ? 700 : 500, fontSize: isMLPrediction ? 18 : 13 }} title={isMLPrediction ? "ML Predicted Time" : undefined}>
                             {Math.round(t)} min
-                            {isMLPrediction && <span style={{ fontSize: 10, marginLeft: 4 }}>🧠</span>}
+                            {isMLPrediction && <span style={{ fontSize: 14, marginLeft: 4 }}>🧠</span>}
                           </span>
                         );
                       })()}
@@ -807,14 +831,16 @@ export default function PathPlanning() {
                       html: `<div style="
                         background: #d32f2f;
                         color: white;
-                        padding: 4px 8px;
-                        border-radius: 12px;
-                        font-size: 11px;
+                        padding: 6px 12px;
+                        border-radius: 16px;
+                        font-size: 15px;
                         font-weight: bold;
                         border: 2px solid white;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
                         white-space: nowrap;
-                      ">${(Number(xgbResult.predicted_time_minutes) / 2).toFixed(0)} min</div>`,
+                        display: flex; align-items: center; gap: 6px;">
+                        🧠 ${(xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes).toFixed(2) : "N/A")} min
+                      </div>`,
                       iconSize: [60, 20],
                       className: ""
                     })}
@@ -830,14 +856,16 @@ export default function PathPlanning() {
                       html: `<div style="
                         background: #d32f2f;
                         color: white;
-                        padding: 4px 8px;
-                        border-radius: 12px;
-                        font-size: 11px;
+                        padding: 6px 12px;
+                        border-radius: 16px;
+                        font-size: 15px;
                         font-weight: bold;
                         border: 2px solid white;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
                         white-space: nowrap;
-                      ">${(Number(xgbResult.predicted_time_minutes) / 2).toFixed(0)} min</div>`,
+                        display: flex; align-items: center; gap: 6px;">
+                        ${(xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes).toFixed(2) : "N/A")} min
+                      </div>`,
                       iconSize: [60, 20],
                       className: ""
                     })}
