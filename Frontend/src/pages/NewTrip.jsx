@@ -431,6 +431,7 @@ export default function NewTrip() {
                     <input
                       type="number"
                       min="0"
+                      step="any"
                       placeholder="Weight"
                       required
                       className="small-input"

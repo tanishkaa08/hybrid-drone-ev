@@ -425,15 +425,7 @@ export default function PathPlanning() {
   // Use ML predicted time if available, otherwise calculate based on distance
   const droneTripTime = xgbResult && xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes) : (2 * droneLeg / 40) * 60;
 
-  // Calculate total trip time as the sum of all segment times in the traversal order
-  const totalTripTime = traversalPoints.slice(0, -1).reduce((sum, pt, idx) => {
-    return sum + getSegmentTime(
-      traversalPoints[idx].coords,
-      traversalPoints[idx + 1].coords,
-      traversalPoints[idx].type,
-      traversalPoints[idx + 1].type
-    );
-  }, 0);
+  const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, truckTimeAfter);
 
   // --- Carbon Emission Calculation (Corrected) ---
   const TRUCK_EMISSION_PER_KM = 0.746; // kg CO2/km
@@ -723,9 +715,17 @@ export default function PathPlanning() {
     try {
       await axios.post('/api/trips/createTrip', trip);
 
-     
       if (trip.drone) {
         trip.drone.available = false;
+      }
+
+      // Add calculated stats to trip before saving
+      trip.carbonReduction = carbonReduction;
+      trip.carbonEmission = carbonEmission;
+      trip.totalTripTime = totalTripTime;
+      // Save ML-suggested drone id if available
+      if (xgbResult && (xgbResult.drone_id || (xgbResult.drone && xgbResult.drone.drone_id))) {
+        trip.mlDroneId = xgbResult.drone_id || (xgbResult.drone && xgbResult.drone.drone_id);
       }
 
       let dronesList = JSON.parse(localStorage.getItem("dronesList") || "[]");
@@ -860,16 +860,14 @@ export default function PathPlanning() {
                       html: `<div style="
                         background: #d32f2f;
                         color: white;
-                        padding: 6px 12px;
-                        border-radius: 16px;
-                        font-size: 15px;
+                        padding: 4px 8px;
+                        border-radius: 12px;
+                        font-size: 11px;
                         font-weight: bold;
                         border: 2px solid white;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
                         white-space: nowrap;
-                        display: flex; align-items: center; gap: 6px;">
-                        🧠 ${(xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes).toFixed(2) : "N/A")} min
-                      </div>`,
+                      ">${(Number(xgbResult.predicted_time_minutes) / 2).toFixed(0)} min</div>`,
                       iconSize: [60, 20],
                       className: ""
                     })}
@@ -885,16 +883,14 @@ export default function PathPlanning() {
                       html: `<div style="
                         background: #d32f2f;
                         color: white;
-                        padding: 6px 12px;
-                        border-radius: 16px;
-                        font-size: 15px;
+                        padding: 4px 8px;
+                        border-radius: 12px;
+                        font-size: 11px;
                         font-weight: bold;
                         border: 2px solid white;
                         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
                         white-space: nowrap;
-                        display: flex; align-items: center; gap: 6px;">
-                        ${(xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes).toFixed(2) : "N/A")} min
-                      </div>`,
+                      ">${(Number(xgbResult.predicted_time_minutes) / 2).toFixed(0)} min</div>`,
                       iconSize: [60, 20],
                       className: ""
                     })}
