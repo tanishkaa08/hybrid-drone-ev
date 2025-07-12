@@ -596,31 +596,48 @@ export default function PathPlanning() {
           justifyContent: "flex-end"
         }}>
           <button
-            style={{
-              background: "#1976d2",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              padding: "12px 28px",
-              fontWeight: 600,
-              fontSize: "1.1em",
-              cursor: "pointer",
-              boxShadow: "0 2px 8px #1976d222",
-              transition: "background 0.2s"
-            }}
-            onClick={async () => {
-              try {
-                await axios.post('/api/trips/createTrip', trip);
-                const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
-                allTrips.push(trip);
-                localStorage.setItem("allTrips", JSON.stringify(allTrips));
-                localStorage.removeItem("latestTrip");
-                navigate("/tripresults");
-              } catch (error) {
-                alert("Error: Failed to execute trip.");
-              }
-            }}
-          >Execute Delivery</button>
+  style={{
+    background: "#1976d2",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    padding: "12px 28px",
+    fontWeight: 600,
+    fontSize: "1.1em",
+    cursor: "pointer",
+    boxShadow: "0 2px 8px #1976d222",
+    transition: "background 0.2s"
+  }}
+  onClick={async () => {
+    try {
+      await axios.post('/api/trips/createTrip', trip);
+
+      // Mark the drone as unavailable locally
+      if (trip.drone) {
+        trip.drone.available = false;
+      }
+
+      let dronesList = JSON.parse(localStorage.getItem("dronesList") || "[]");
+      if (trip.drone) {
+        dronesList = dronesList.map(d =>
+          d.droneId === trip.drone.droneId ? { ...d, available: false } : d
+        );
+        localStorage.setItem("dronesList", JSON.stringify(dronesList));
+      }
+
+      const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
+      allTrips.push(trip);
+      localStorage.setItem("allTrips", JSON.stringify(allTrips));
+      localStorage.removeItem("latestTrip");
+      navigate("/tripresults");
+    } catch (error) {
+      alert("Error: Failed to execute trip.");
+    }
+  }}
+>
+  Execute Delivery
+</button>
+
          <button
   style={{
     background: "#fff",

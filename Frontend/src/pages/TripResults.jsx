@@ -23,50 +23,35 @@ function calcDroneTime(distanceKm, payloadKg) {
   return baseTime + penalty;
 }
 
-// Custom marker icons
-const hqIcon = new L.Icon({
-  iconUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "hq-marker"
-});
-const droneIcon = new L.Icon({
-  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "drone-marker"
-});
-const truckIcon = new L.Icon({
-  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  shadowSize: [41, 41],
-  className: "truck-marker"
-});
-
 export default function TripResults() {
   const [trips, setTrips] = useState([]);
   const [selected, setSelected] = useState(0);
   const [truckRoute, setTruckRoute] = useState({ distance: null, duration: null, loading: false, error: null });
   const [droneTime, setDroneTime] = useState(null);
   const [truckTime, setTruckTime] = useState(null);
-  const [mapHeight, setMapHeight] = useState(300);
-  const [mapWidth, setMapWidth] = useState(600);
+  const [toggleLoading, setToggleLoading] = useState(false);
+
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Shared button style
+  const buttonStyle = {
+    background: "#43a047",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    padding: "12px 24px",
+    fontWeight: 600,
+    fontSize: "1.05em",
+    cursor: toggleLoading ? "wait" : "pointer",
+    marginLeft: 10,
+    opacity: toggleLoading ? 0.7 : 1
+  };
 
   // Reload trips whenever this page is navigated to
   useEffect(() => {
     const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]");
-    setTrips(allTrips.slice().reverse()); // Most recent first, do not mutate original
+    setTrips(allTrips.slice().reverse());
     setSelected(0);
   }, [location]);
 
@@ -102,8 +87,8 @@ export default function TripResults() {
           setTruckTime(null);
           return;
         }
-        const res = await axios.post(
-          "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+                const res = await axios.post(
+          "/orsapi/v2/directions/driving-car/geojson",
           { coordinates },
           {
             headers: {
@@ -112,6 +97,7 @@ export default function TripResults() {
             }
           }
         );
+
         const summary = res.data.features[0].properties.summary;
         setTruckRoute({
           distance: (summary.distance / 1000).toFixed(2), // km
@@ -121,6 +107,7 @@ export default function TripResults() {
         });
         setTruckTime((summary.duration / 60).toFixed(0));
       } catch (err) {
+        console.error("ORS error:", err, err?.response?.data);
         setTruckRoute({ distance: null, duration: null, loading: false, error: err.message || "Failed to fetch route" });
         setTruckTime(null);
       }
@@ -137,6 +124,40 @@ export default function TripResults() {
     }
   }, [trip]);
 
+  const handleFinishDelivery = async () => {
+    if (!trip?.drone) {
+      alert("No drone assigned to this trip.");
+      return;
+    }
+    setToggleLoading(true);
+    try {
+      await axios.put(`/api/v1/drones/toggleavailability/${trip.drone.droneId}`);
+
+      let dronesList = JSON.parse(localStorage.getItem("dronesList") || "[]");
+      dronesList = dronesList.map(d =>
+        d.droneId === trip.drone.droneId
+          ? { ...d, available: !d.available }
+          : d
+      );
+      localStorage.setItem("dronesList", JSON.stringify(dronesList));
+
+      trip.drone.available = !trip.drone.available;
+      const allTrips = JSON.parse(localStorage.getItem("allTrips") || "[]").map(t =>
+        t.drone && t.drone.droneId === trip.drone.droneId
+          ? { ...t, drone: { ...t.drone, available: trip.drone.available } }
+          : t
+      );
+      localStorage.setItem("allTrips", JSON.stringify(allTrips));
+      setTrips(allTrips.slice().reverse());
+
+      alert("Drone availability toggled successfully!");
+    } catch (error) {
+      alert("Failed to toggle drone availability: " + (error?.response?.data?.error || error.message));
+    } finally {
+      setToggleLoading(false);
+    }
+  };
+
   if (!trips.length) {
     return <p style={{ padding: "20px" }}>No trip data found. Please add drones and deliveries.</p>;
   }
@@ -148,7 +169,7 @@ export default function TripResults() {
         <div style={{ maxHeight: 400, overflowY: 'auto', marginBottom: 24 }}>
           {trips.map((t, i) => (
             <div
-              key={t.createdAt || i}
+              key={`${t.createdAt || ''}_${i}`}
               className={`delivery-card${i === selected ? ' selected' : ''}`}
               style={{ cursor: 'pointer', marginBottom: 12, border: i === selected ? '2px solid #1976d2' : '1px solid #ddd' }}
               onClick={() => setSelected(i)}
@@ -168,6 +189,7 @@ export default function TripResults() {
           <div>✈️ <b>Drone Delivery:</b></div>
           <div className="delivery-info">
             <p><b>Drone:</b> {trip.drone ? trip.drone.droneId : 'N/A'}</p>
+            <p><b>Available:</b> {trip.drone ? (trip.drone.available ? "Yes" : "No") : "N/A"}</p>
             <p><b>To:</b> {trip.droneDelivery ? `${trip.droneDelivery.latitude}, ${trip.droneDelivery.longitude}` : 'N/A'}</p>
             <p><b>Payload:</b> {trip.droneDelivery ? trip.droneDelivery.weight : 'N/A'} kg</p>
             <p><b>Distance:</b> {trip.droneDist ? (Number(trip.droneDist) * 1.60934).toFixed(2) + ' km' : 'N/A'}</p>
@@ -209,10 +231,16 @@ export default function TripResults() {
           })()}
         </div>
         <div className="button-group">
-          <button className="edit-btn" onClick={() => navigate("/newtrip")}>Edit Delivery</button>
+          <button
+            className="finish-btn"
+            style={buttonStyle}
+            onClick={handleFinishDelivery}
+            disabled={toggleLoading}
+          >
+            {toggleLoading ? "Finishing..." : "Finish Delivery"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
-
