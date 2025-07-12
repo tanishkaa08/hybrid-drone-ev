@@ -46,7 +46,8 @@ const hqIcon = letterIcon("A", "#1976d2");
 const launchIcon = letterIcon("L", "#ffa000");
 const landingIcon = letterIcon("P", "#7b1fa2");
 
-const HQ = { lat: 12.9716, lng: 77.5946 }; // Bangalore
+// Use HQ from trip if available, otherwise default
+const DEFAULT_HQ = { lat: 12.9716, lng: 77.5946 };
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const OPENWEATHER_API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY;
 console.log("OpenWeather API Key:", OPENWEATHER_API_KEY);
@@ -70,12 +71,23 @@ function getLabel(idx) {
   return String.fromCharCode(65 + idx);
 }
 function formatTimeMinutes(minutes) {
-  const min = Math.round(Number(minutes));
-  if (minutes === undefined || minutes === null || isNaN(min) || min < 0) return 'N/A';
-  if (min < 60) return min + ' min';
-  const hr = Math.floor(min / 60);
-  const rem = min % 60;
-  return rem === 0 ? `${hr} hr` : `${hr} hr ${rem} min`;
+  const totalSeconds = Math.round(Number(minutes) * 60);
+  if (minutes === undefined || minutes === null || isNaN(totalSeconds) || totalSeconds < 0) return 'N/A';
+  
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  
+  let result = '';
+  if (hours > 0) {
+    result += `${hours} hr `;
+  }
+  if (mins > 0 || hours > 0) {
+    result += `${mins} min `;
+  }
+  result += `${seconds} sec`;
+  
+  return result.trim();
 }
 
 // Nearest Neighbor TSP for truck route optimization
@@ -99,7 +111,7 @@ function nearestNeighborRoute(hq, deliveries) {
     route.push([current.lat, current.lng]);
     unvisited.splice(minIdx, 1);
   }
-  route.push([hq.lat, hq.lng]);
+  // Remove return route to HQ - only show outbound journey
   return route;
 }
 
@@ -176,6 +188,9 @@ export default function PathPlanning() {
   const [windLoading, setWindLoading] = useState(false);
   const [windError, setWindError] = useState(null);
   const [xgbResult, setXgbResult] = useState(null);
+
+  // Use HQ from trip if available
+  const HQ = trip && trip.hqLat && trip.hqLng ? { lat: Number(trip.hqLat), lng: Number(trip.hqLng) } : DEFAULT_HQ;
 
   const navigate = useNavigate();
 
@@ -289,7 +304,7 @@ export default function PathPlanning() {
       launchInsertIdx = i + 1; // insert after i-th delivery
     }
   }
-  // Build traversal order array (only user points + hybrid points)
+  // Build traversal order array (only user points + hybrid points) - no return to HQ
   let traversalPoints = [];
   // HQ
   if (HQ.lat != null && HQ.lng != null) {
@@ -319,10 +334,7 @@ export default function PathPlanning() {
       traversalPoints.push({ label: getLabel(launchInsertIdx + 4 + (i - launchInsertIdx)), type: "Truck", coords: [truckDeliveries[i].latitude, truckDeliveries[i].longitude] });
     }
   }
-  // HQ (end)
-  if (HQ.lat != null && HQ.lng != null) {
-    traversalPoints.push({ label: getLabel(launchInsertIdx + 4 + (truckDeliveries.length - launchInsertIdx)), type: "HQ", coords: [HQ.lat, HQ.lng] });
-  }
+  // No return to HQ - trip ends at last delivery
   const allPoints = traversalPoints.map(pt => pt.coords);
 
   // Calculate time between each stop
@@ -331,18 +343,36 @@ export default function PathPlanning() {
     const [latA, lngA] = ptA;
     const [latB, lngB] = ptB;
     const dist = haversineDistance(latA, lngA, latB, lngB);
-    // Use ML time (predicted_time_minutes or time) for each drone segment (no division)
+    
+    // Use ML time (predicted_time_minutes or time) for drone segments
     const mlMinutes = xgbResult && (xgbResult.predicted_time_minutes ?? xgbResult.time);
+    
+    // Drone segments (Launch to Delivery, Delivery to Landing)
     if ((typeA === "Launch" && typeB === "DroneDelivery") || 
         (typeA === "DroneDelivery" && typeB === "Landing")) {
       if (mlMinutes) {
+        // For drone segments, use ML prediction directly
         return Number(mlMinutes);
       }
-      return (dist / 40) * 60; // fallback to calculated time
-    }
-    if (["Launch", "DroneDelivery", "Landing"].includes(typeA) || ["Launch", "DroneDelivery", "Landing"].includes(typeB)) {
+      // Fallback: calculate based on drone speed (40 km/h) and distance
       return (dist / 40) * 60; // minutes
     }
+    
+    // Truck segments (HQ to Truck deliveries, Truck to Truck, Truck to Launch)
+    if (typeA === "HQ" || typeB === "HQ" || 
+        (typeA === "Truck" && typeB === "Truck") ||
+        (typeA === "Truck" && typeB === "Launch") ||
+        (typeA === "Launch" && typeB === "Truck")) {
+      // Truck speed: 30 km/h in city traffic
+      return (dist / 30) * 60; // minutes
+    }
+    
+    // Landing to next truck delivery (if any)
+    if (typeA === "Landing" && typeB === "Truck") {
+      return (dist / 30) * 60; // minutes
+    }
+    
+    // Default fallback
     return (dist / 30) * 60; // minutes
   }
 
@@ -405,52 +435,59 @@ export default function PathPlanning() {
     );
   }, 0);
 
-  // Emissions (truck only, hybrid)
-  let truckOnlyDist = 0;
-  let prev = HQ;
-  const allDeliveries = [droneDelivery, ...truckDeliveries];
-  allDeliveries.forEach((del) => {
-    const next = { lat: del.latitude, lng: del.longitude };
-    truckOnlyDist += haversineDistance(prev.lat, prev.lng, next.lat, next.lng); // in km
-    prev = next;
-  });
-  truckOnlyDist += haversineDistance(prev.lat, prev.lng, HQ.lat, HQ.lng); // in km
+  // --- Carbon Emission Calculation (Corrected) ---
+  const TRUCK_EMISSION_PER_KM = 0.746; // kg CO2/km
+  const DRONE_EMISSION_PER_KM = 0.062; // kg CO2/km
 
-  const droneDistKm = droneLeg * 2; // round trip in km
-  let truckDist = 0;
-  for (let i = 0; i < polyline.length - 1; i++) {
-    truckDist += haversineDistance(
-      polyline[i][0], polyline[i][1],
-      polyline[i+1][0], polyline[i+1][1]
-    ); // in km
-  }
-
-  const TRUCK_EMISSION_PER_KM = 0.746; // 1.2 miles = 1.60934 km, so 1.2/1.60934 ≈ 0.746 kg/km
-  const DRONE_EMISSION_PER_KM = 0.062; // 0.1 miles = 0.160934 km, so 0.1/1.60934 ≈ 0.062 kg/km
-
-  // Calculate total distance if all deliveries are done by truck
-  let allTruckDist = 0;
-  let prevTruck = HQ;
-  allDeliveries.forEach((del) => {
-    allTruckDist += haversineDistance(prevTruck.lat, prevTruck.lng, del.latitude, del.longitude);
-    prevTruck = { lat: del.latitude, lng: del.longitude };
-  });
-  allTruckDist += haversineDistance(prevTruck.lat, prevTruck.lng, HQ.lat, HQ.lng);
-  const allTruckCarbon = allTruckDist * TRUCK_EMISSION_PER_KM;
-
-  // Calculate hybrid: 1 drone delivery (from launch/landing), rest by truck
-  let hybridDroneDist = 2 * haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude); // round trip for drone
-  let hybridTruckDist = 0;
-  let prevHybrid = HQ;
+  // Calculate the actual distances for both scenarios
+  const droneDeliveryDistance = haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude);
+  
+  // Scenario 1: Truck-only (all deliveries by truck)
+  // Calculate total truck distance for all deliveries including the drone delivery
+  let truckOnlyTotalDistance = 0;
+  let prevPoint = HQ;
+  
+  // Add distance to all truck deliveries
   truckDeliveries.forEach(del => {
-    hybridTruckDist += haversineDistance(prevHybrid.lat, prevHybrid.lng, del.latitude, del.longitude);
-    prevHybrid = { lat: del.latitude, lng: del.longitude };
+    const dist = haversineDistance(prevPoint.lat, prevPoint.lng, del.latitude, del.longitude);
+    truckOnlyTotalDistance += dist;
+    prevPoint = { lat: del.latitude, lng: del.longitude };
   });
-  hybridTruckDist += haversineDistance(prevHybrid.lat, prevHybrid.lng, HQ.lat, HQ.lng);
-  const hybridCarbon = (hybridTruckDist * TRUCK_EMISSION_PER_KM) + (hybridDroneDist * DRONE_EMISSION_PER_KM);
+  
+  // Add distance to drone delivery location
+  truckOnlyTotalDistance += haversineDistance(prevPoint.lat, prevPoint.lng, droneDelivery.latitude, droneDelivery.longitude);
+  
+  const truckOnlyCarbon = truckOnlyTotalDistance * TRUCK_EMISSION_PER_KM;
 
-  // Carbon reduction
-  const carbonReduction = allTruckCarbon > 0 ? ((allTruckCarbon - hybridCarbon) / allTruckCarbon) * 100 : 0;
+  // Scenario 2: Hybrid (truck delivers other packages, drone delivers this package)
+  // Calculate truck distance (excluding drone delivery location)
+  let hybridTruckDistance = 0;
+  prevPoint = HQ;
+  
+  // Add distance to truck deliveries only
+  truckDeliveries.forEach(del => {
+    const dist = haversineDistance(prevPoint.lat, prevPoint.lng, del.latitude, del.longitude);
+    hybridTruckDistance += dist;
+    prevPoint = { lat: del.latitude, lng: del.longitude };
+  });
+  
+  // Add distance from last truck delivery to launch point
+  hybridTruckDistance += haversineDistance(prevPoint.lat, prevPoint.lng, launchPoint[0], launchPoint[1]);
+  
+  // Add distance from landing point to next truck delivery (if any)
+  if (launchInsertIdx < truckDeliveries.length) {
+    hybridTruckDistance += haversineDistance(launchPoint[0], launchPoint[1], truckDeliveries[launchInsertIdx].latitude, truckDeliveries[launchInsertIdx].longitude);
+  }
+  
+  const hybridTruckCarbon = hybridTruckDistance * TRUCK_EMISSION_PER_KM;
+  const hybridDroneCarbon = droneDeliveryDistance * DRONE_EMISSION_PER_KM;
+  const hybridCarbon = hybridTruckCarbon + hybridDroneCarbon;
+
+  // Carbon reduction = (truck-only - hybrid) / truck-only * 100
+  const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
+  
+  // Carbon emission saved = truck-only - hybrid
+  const carbonEmission = truckOnlyCarbon - hybridCarbon;
 
   return (
     <div style={{
@@ -489,12 +526,8 @@ export default function PathPlanning() {
           }}>{carbonReduction.toFixed(1)}%</div>
           <div style={{ fontSize: "0.97em", color: "#666" }}>
             <span style={{marginRight: 16}}>
-              <span style={{fontWeight: 500}}>Truck Only: </span>
-              {allTruckCarbon.toFixed(2)} kg CO₂
-            </span>
-            <span>
-              <span style={{fontWeight: 500}}>Hybrid: </span>
-              {hybridCarbon.toFixed(2)} kg CO₂
+              <span style={{fontWeight: 500}}>Carbon Emission: </span>
+              {carbonEmission.toFixed(2)} kg CO₂
             </span>
           </div>
         </div>
@@ -609,9 +642,9 @@ export default function PathPlanning() {
                                              (traversalPoints[idx].type === "DroneDelivery" && traversalPoints[idx + 1].type === "Landing");
                         const isMLPrediction = isDroneSegment && xgbResult && xgbResult.predicted_time_minutes;
                         return isNaN(t) ? "" : (
-                          <span style={{ color: isMLPrediction ? "#d32f2f" : "#1976d2", fontWeight: isMLPrediction ? 700 : 500, fontSize: isMLPrediction ? 18 : 13 }} title={isMLPrediction ? "ML Predicted Time" : undefined}>
-                            {Math.round(t)} min
-                            {isMLPrediction && <span style={{ fontSize: 14, marginLeft: 4 }}>🧠</span>}
+                          <span style={{ color: isMLPrediction ? "#d32f2f" : "#1976d2", fontWeight: isMLPrediction ? 700 : 500, fontSize: isMLPrediction ? 16 : 12 }} title={isMLPrediction ? "ML Predicted Time" : undefined}>
+                            {formatTimeMinutes(t)}
+                            {isMLPrediction && <span style={{ fontSize: 12, marginLeft: 4 }}>🧠</span>}
                           </span>
                         );
                       })()}
@@ -653,10 +686,6 @@ export default function PathPlanning() {
               <tr>
                 <td style={{fontWeight: 500, color: "#7b1fa2"}}>{getLabel(optimizedNodeOrder.length + 1)} (Landing):</td>
                 <td>{landingPoint ? `${landingPoint[0].toFixed(5)}, ${landingPoint[1].toFixed(5)}` : "N/A"}</td>
-              </tr>
-              <tr>
-                <td style={{fontWeight: 500, color: "#1976d2"}}>{getLabel(optimizedNodeOrder.length + 2)} (HQ):</td>
-                <td>{HQ.lat}, {HQ.lng}</td>
               </tr>
             </tbody>
           </table>

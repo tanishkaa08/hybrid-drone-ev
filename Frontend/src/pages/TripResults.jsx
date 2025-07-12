@@ -8,12 +8,23 @@ import L from "leaflet";
 const HQ = { lat: 12.9716, lng: 77.5946 }; // Bangalore HQ
 
 function formatTimeMinutes(minutes) {
-  const min = Math.round(Number(minutes));
-  if (minutes === undefined || minutes === null || isNaN(min) || min < 0) return 'N/A';
-  if (min < 60) return min + ' min';
-  const hr = Math.floor(min / 60);
-  const rem = min % 60;
-  return rem === 0 ? `${hr} hr` : `${hr} hr ${rem} min`;
+  const totalSeconds = Math.round(Number(minutes) * 60);
+  if (minutes === undefined || minutes === null || isNaN(totalSeconds) || totalSeconds < 0) return 'N/A';
+  
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  
+  let result = '';
+  if (hours > 0) {
+    result += `${hours} hr `;
+  }
+  if (mins > 0 || hours > 0) {
+    result += `${mins} min `;
+  }
+  result += `${seconds} sec`;
+  
+  return result.trim();
 }
 
 function calcDroneTime(distanceKm, payloadKg) {
@@ -45,6 +56,8 @@ export default function TripResults() {
   const [droneTime, setDroneTime] = useState(null);
   const [truckTime, setTruckTime] = useState(null);
   const [toggleLoading, setToggleLoading] = useState(false);
+  const [finishedDeliveries, setFinishedDeliveries] = useState(new Set()); // Track finished deliveries
+  const [xgbResult, setXgbResult] = useState(null); // Add xgbResult state like PathPlanning
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -69,6 +82,22 @@ export default function TripResults() {
     setTrips(allTrips.slice().reverse());
     setSelected(0);
   }, [location]);
+
+  // Load xgbResult from localStorage (same as PathPlanning.jsx)
+  useEffect(() => {
+    const result = localStorage.getItem("xgbResult");
+    if (result && result !== "undefined") {
+      try {
+        const parsedResult = JSON.parse(result);
+        setXgbResult(parsedResult);
+      } catch (e) {
+        console.error("Failed to parse xgbResult:", e);
+        setXgbResult(null);
+      }
+    } else {
+      setXgbResult(null);
+    }
+  }, []);
 
   const trip = trips[selected];
 
@@ -168,6 +197,10 @@ export default function TripResults() {
       localStorage.setItem("allTrips", JSON.stringify(allTrips));
       setTrips(allTrips.slice().reverse());
 
+      // Mark this delivery as finished
+      const tripId = `${trip.createdAt}_${trip.drone?.droneId}`;
+      setFinishedDeliveries(prev => new Set([...prev, tripId]));
+
       alert("Drone availability toggled successfully!");
     } catch (error) {
       alert("Failed to toggle drone availability: " + (error?.response?.data?.error || error.message));
@@ -251,9 +284,11 @@ export default function TripResults() {
   );
 
   // Build traversal order based on user-provided deliveries
+  // User trip: [HQ, ...truckDeliveries, HQ] (same as PathPlanning.jsx)
+  const userTrip = [HQ, ...truckDeliveries, HQ];
   let launchInsertIdx = 0;
   let minDist = Infinity;
-  const userTrip = [HQ, ...truckDeliveries, HQ];
+  // Find the segment where the launch point is closest
   for (let i = 0; i < userTrip.length - 1; i++) {
     const [lat1, lng1] = [userTrip[i].latitude || userTrip[i].lat, userTrip[i].longitude || userTrip[i].lng];
     const [lat2, lng2] = [userTrip[i+1].latitude || userTrip[i+1].lat, userTrip[i+1].longitude || userTrip[i+1].lng];
@@ -261,32 +296,40 @@ export default function TripResults() {
     const dist = haversineDistance(launchPoint[0], launchPoint[1], lat1, lng1) + haversineDistance(launchPoint[0], launchPoint[1], lat2, lng2);
     if (dist < minDist) {
       minDist = dist;
-      launchInsertIdx = i + 1;
+      launchInsertIdx = i + 1; // insert after i-th delivery
     }
   }
+  // Build traversal order array (only user points + hybrid points) - same as PathPlanning.jsx
   let traversalPoints = [];
+  // HQ
   if (HQ.lat != null && HQ.lng != null) {
     traversalPoints.push({ label: getLabel(0), type: "HQ", coords: [HQ.lat, HQ.lng] });
   }
+  // Truck deliveries up to launchInsertIdx
   for (let i = 0; i < launchInsertIdx; i++) {
     if (truckDeliveries[i] && truckDeliveries[i].latitude != null && truckDeliveries[i].longitude != null) {
       traversalPoints.push({ label: getLabel(i + 1), type: "Truck", coords: [truckDeliveries[i].latitude, truckDeliveries[i].longitude] });
     }
   }
+  // Launch
   if (launchPoint && launchPoint[0] != null && launchPoint[1] != null) {
     traversalPoints.push({ label: getLabel(launchInsertIdx + 1), type: "Launch", coords: launchPoint });
   }
+  // Drone Delivery
   if (droneDelivery && droneDelivery.latitude != null && droneDelivery.longitude != null) {
     traversalPoints.push({ label: getLabel(launchInsertIdx + 2), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] });
   }
+  // Landing
   if (launchPoint && launchPoint[0] != null && launchPoint[1] != null) {
     traversalPoints.push({ label: getLabel(launchInsertIdx + 3), type: "Landing", coords: launchPoint });
   }
+  // Remaining truck deliveries after launchInsertIdx
   for (let i = launchInsertIdx; i < truckDeliveries.length; i++) {
     if (truckDeliveries[i] && truckDeliveries[i].latitude != null && truckDeliveries[i].longitude != null) {
       traversalPoints.push({ label: getLabel(launchInsertIdx + 4 + (i - launchInsertIdx)), type: "Truck", coords: [truckDeliveries[i].latitude, truckDeliveries[i].longitude] });
     }
   }
+  // HQ (end)
   if (HQ.lat != null && HQ.lng != null) {
     traversalPoints.push({ label: getLabel(launchInsertIdx + 4 + (truckDeliveries.length - launchInsertIdx)), type: "HQ", coords: [HQ.lat, HQ.lng] });
   }
@@ -296,64 +339,108 @@ export default function TripResults() {
     const [latA, lngA] = ptA;
     const [latB, lngB] = ptB;
     const dist = haversineDistance(latA, lngA, latB, lngB);
-    // Use ML time (predicted_time_minutes or time) for each drone segment (no division)
-    let xgbResult = null;
-    try {
-      xgbResult = JSON.parse(localStorage.getItem("xgbResult"));
-    } catch {}
+    
+    // Use ML time (predicted_time_minutes or time) for drone segments
     const mlMinutes = xgbResult && (xgbResult.predicted_time_minutes ?? xgbResult.time);
+    
+    // Drone segments (Launch to Delivery, Delivery to Landing)
     if ((typeA === "Launch" && typeB === "DroneDelivery") || 
         (typeA === "DroneDelivery" && typeB === "Landing")) {
       if (mlMinutes) {
+        // For drone segments, use ML prediction directly
         return Number(mlMinutes);
       }
-      return (dist / 40) * 60; // fallback to calculated time
-    }
-    if (["Launch", "DroneDelivery", "Landing"].includes(typeA) || ["Launch", "DroneDelivery", "Landing"].includes(typeB)) {
+      // Fallback: calculate based on drone speed (40 km/h) and distance
       return (dist / 40) * 60; // minutes
     }
+    
+    // Truck segments (HQ to Truck deliveries, Truck to Truck, Truck to Launch)
+    if (typeA === "HQ" || typeB === "HQ" || 
+        (typeA === "Truck" && typeB === "Truck") ||
+        (typeA === "Truck" && typeB === "Launch") ||
+        (typeA === "Launch" && typeB === "Truck")) {
+      // Truck speed: 30 km/h in city traffic
+      return (dist / 30) * 60; // minutes
+    }
+    
+    // Landing to next truck delivery (if any)
+    if (typeA === "Landing" && typeB === "Truck") {
+      return (dist / 30) * 60; // minutes
+    }
+    
+    // Default fallback
     return (dist / 30) * 60; // minutes
   }
 
   // Calculate total trip time as the sum of all segment times in the traversal order
   const totalTripTime = traversalPoints.slice(0, -1).reduce((sum, pt, idx) => {
-    return sum + getSegmentTime(
+    const segmentTime = getSegmentTime(
       traversalPoints[idx].coords,
       traversalPoints[idx + 1].coords,
       traversalPoints[idx].type,
       traversalPoints[idx + 1].type
     );
+    console.log(`[TripResults] Segment ${idx}: ${traversalPoints[idx].type} -> ${traversalPoints[idx + 1].type} = ${segmentTime} min`);
+    return sum + segmentTime;
   }, 0);
 
-  // --- Carbon Emission Calculation (copy from PathPlanning.jsx) ---
-  const DRONE_EMISSION_PER_KM = 0.062;
-  const TRUCK_EMISSION_PER_KM = 0.746;
+  console.log(`[TripResults] Total trip time: ${totalTripTime} min`);
+  console.log(`[TripResults] Traversal points:`, traversalPoints.map(pt => ({ type: pt.type, coords: pt.coords })));
+  console.log(`[TripResults] xgbResult:`, xgbResult);
 
-  const allDeliveries = [droneDelivery, ...truckDeliveries];
+  // --- Carbon Emission Calculation (Corrected) ---
+  const TRUCK_EMISSION_PER_KM = 0.746; // kg CO2/km
+  const DRONE_EMISSION_PER_KM = 0.062; // kg CO2/km
 
-  // Calculate total distance if all deliveries are done by truck
-  let allTruckDist = 0;
-  let prevTruck = HQ;
-  allDeliveries.forEach((del) => {
-    allTruckDist += haversineDistance(prevTruck.lat, prevTruck.lng, del.latitude, del.longitude);
-    prevTruck = { lat: del.latitude, lng: del.longitude };
-  });
-  allTruckDist += haversineDistance(prevTruck.lat, prevTruck.lng, HQ.lat, HQ.lng);
-  const allTruckCarbon = allTruckDist * TRUCK_EMISSION_PER_KM;
-
-  // Calculate hybrid: 1 drone delivery (from launchPoint), rest by truck
-  let hybridDroneDist = 2 * haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude); // round trip for drone
-  let hybridTruckDist = 0;
-  let prevHybrid = HQ;
+  // Calculate the actual distances for both scenarios
+  const droneDeliveryDistance = haversineDistance(launchPoint[0], launchPoint[1], droneDelivery.latitude, droneDelivery.longitude);
+  
+  // Scenario 1: Truck-only (all deliveries by truck)
+  // Calculate total truck distance for all deliveries including the drone delivery
+  let truckOnlyTotalDistance = 0;
+  let prevPoint = HQ;
+  
+  // Add distance to all truck deliveries
   truckDeliveries.forEach(del => {
-    hybridTruckDist += haversineDistance(prevHybrid.lat, prevHybrid.lng, del.latitude, del.longitude);
-    prevHybrid = { lat: del.latitude, lng: del.longitude };
+    const dist = haversineDistance(prevPoint.lat, prevPoint.lng, del.latitude, del.longitude);
+    truckOnlyTotalDistance += dist;
+    prevPoint = { lat: del.latitude, lng: del.longitude };
   });
-  hybridTruckDist += haversineDistance(prevHybrid.lat, prevHybrid.lng, HQ.lat, HQ.lng);
-  const hybridCarbon = (hybridTruckDist * TRUCK_EMISSION_PER_KM) + (hybridDroneDist * DRONE_EMISSION_PER_KM);
+  
+  // Add distance to drone delivery location
+  truckOnlyTotalDistance += haversineDistance(prevPoint.lat, prevPoint.lng, droneDelivery.latitude, droneDelivery.longitude);
+  
+  const truckOnlyCarbon = truckOnlyTotalDistance * TRUCK_EMISSION_PER_KM;
 
-  // Carbon reduction
-  const carbonReduction = allTruckCarbon > 0 ? ((allTruckCarbon - hybridCarbon) / allTruckCarbon) * 100 : 0;
+  // Scenario 2: Hybrid (truck delivers other packages, drone delivers this package)
+  // Calculate truck distance (excluding drone delivery location)
+  let hybridTruckDistance = 0;
+  prevPoint = HQ;
+  
+  // Add distance to truck deliveries only
+  truckDeliveries.forEach(del => {
+    const dist = haversineDistance(prevPoint.lat, prevPoint.lng, del.latitude, del.longitude);
+    hybridTruckDistance += dist;
+    prevPoint = { lat: del.latitude, lng: del.longitude };
+  });
+  
+  // Add distance from last truck delivery to launch point
+  hybridTruckDistance += haversineDistance(prevPoint.lat, prevPoint.lng, launchPoint[0], launchPoint[1]);
+  
+  // Add distance from landing point to next truck delivery (if any)
+  if (launchInsertIdx < truckDeliveries.length) {
+    hybridTruckDistance += haversineDistance(launchPoint[0], launchPoint[1], truckDeliveries[launchInsertIdx].latitude, truckDeliveries[launchInsertIdx].longitude);
+  }
+  
+  const hybridTruckCarbon = hybridTruckDistance * TRUCK_EMISSION_PER_KM;
+  const hybridDroneCarbon = droneDeliveryDistance * DRONE_EMISSION_PER_KM;
+  const hybridCarbon = hybridTruckCarbon + hybridDroneCarbon;
+
+  // Carbon reduction = (truck-only - hybrid) / truck-only * 100
+  const carbonReduction = truckOnlyCarbon > 0 ? ((truckOnlyCarbon - hybridCarbon) / truckOnlyCarbon) * 100 : 0;
+  
+  // Carbon emission saved = truck-only - hybrid
+  const carbonEmission = truckOnlyCarbon - hybridCarbon;
 
   return (
     <div className="path-planning-page">
@@ -393,12 +480,8 @@ export default function TripResults() {
           }}>{carbonReduction.toFixed(1)}%</div>
           <div style={{ fontSize: "0.97em", color: "#666" }}>
             <span style={{marginRight: 16}}>
-              <span style={{fontWeight: 500}}>Truck Only: </span>
-              {allTruckCarbon.toFixed(2)} kg CO₂
-            </span>
-            <span>
-              <span style={{fontWeight: 500}}>Hybrid: </span>
-              {hybridCarbon.toFixed(2)} kg CO₂
+              <span style={{fontWeight: 500}}>Carbon Emission: </span>
+              {carbonEmission.toFixed(2)} kg CO₂
             </span>
           </div>
         </div>
@@ -422,16 +505,41 @@ export default function TripResults() {
         
         
         <div className="button-group">
-          <button
-            className="finish-btn"
-            style={buttonStyle}
-            onClick={handleFinishDelivery}
-            disabled={toggleLoading}
-          >
-            {toggleLoading ? "Finishing..." : "Finish Delivery"}
-          </button>
+          {(() => {
+            const tripId = `${trip.createdAt}_${trip.drone?.droneId}`;
+            const isFinished = finishedDeliveries.has(tripId);
+            
+            if (isFinished) {
+              return (
+                <div style={{
+                  background: "#e8f5e8",
+                  color: "#2e7d32",
+                  border: "2px solid #4caf50",
+                  borderRadius: 8,
+                  padding: "12px 24px",
+                  fontWeight: 600,
+                  fontSize: "1.05em",
+                  textAlign: "center"
+                }}>
+                  ✅ Delivery Finished
+                </div>
+              );
+            }
+            
+            return (
+              <button
+                className="finish-btn"
+                style={buttonStyle}
+                onClick={handleFinishDelivery}
+                disabled={toggleLoading}
+              >
+                {toggleLoading ? "Finishing..." : "Finish Delivery"}
+              </button>
+            );
+          })()}
         </div>
       </div>
     </div>
   );
 }
+

@@ -220,10 +220,14 @@ export default function NewTrip() {
       let trip;
       if (typeof predictedDroneIndex === 'number' && predictedDroneIndex >= 0 && predictedDroneIndex < deliveries.length) {
         trip = optimizeTripWithML(deliveries, hqLat, hqLng, predictedDroneIndex);
-        trip.mlPredictedDelivery = deliveries[predictedDroneIndex];
+        if (trip) {
+          trip.mlPredictedDelivery = deliveries[predictedDroneIndex];
+        }
       } else {
         trip = optimizeTrip(deliveries, hqLat, hqLng);
-        trip.mlPredictedDelivery = null;
+        if (trip) {
+          trip.mlPredictedDelivery = null;
+        }
       }
       if (trip) {
         localStorage.setItem('latestTrip', JSON.stringify(trip));
@@ -317,8 +321,8 @@ export default function NewTrip() {
     } catch (error) {
       console.error('ML prediction error:', error);
       const trip = optimizeTrip(deliveries, hqLat, hqLng);
-      trip.mlPredictedDelivery = null;
       if (trip) {
+        trip.mlPredictedDelivery = null;
         localStorage.setItem('latestTrip', JSON.stringify(trip));
         localStorage.removeItem("editTrip");
         nav('/pathplanning');
