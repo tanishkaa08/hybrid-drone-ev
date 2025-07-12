@@ -59,17 +59,20 @@ export default function TripResults() {
 
   // Calculate drone time if possible
   useEffect(() => {
-    if (trip && trip.droneDelivery && trip.droneDist) {
-      const distanceKm = Number(trip.droneDist) * 1.60934;
-      const payloadKg = Number(trip.droneDelivery.weight);
-      if (!isNaN(distanceKm) && !isNaN(payloadKg)) {
-        setDroneTime(calcDroneTime(distanceKm, payloadKg).toFixed(0));
-      } else {
-        setDroneTime(null);
+    // Always use ML prediction if available
+    const xgbResult = localStorage.getItem("xgbResult");
+    if (xgbResult && xgbResult !== "undefined") {
+      try {
+        const parsedResult = JSON.parse(xgbResult);
+        if (parsedResult && (parsedResult.predicted_time_minutes || parsedResult.time)) {
+          setDroneTime(parsedResult.predicted_time_minutes || parsedResult.time);
+          return;
+        }
+      } catch (e) {
+        console.error("Failed to parse xgbResult:", e);
       }
-    } else {
-      setDroneTime(null);
     }
+    setDroneTime(null);
   }, [trip]);
 
   // Call ORS for truck route
@@ -188,12 +191,36 @@ export default function TripResults() {
         <div className="delivery-item">
           <div>✈️ <b>Drone Delivery:</b></div>
           <div className="delivery-info">
-            <p><b>Drone:</b> {trip.drone ? trip.drone.droneId : 'N/A'}</p>
+            <p><b>Drone:</b> {(() => {
+              const xgbResult = localStorage.getItem("xgbResult");
+              if (xgbResult && xgbResult !== "undefined") {
+                try {
+                  const parsedResult = JSON.parse(xgbResult);
+                  if (parsedResult && parsedResult.drone && parsedResult.drone.drone_id) {
+                    return parsedResult.drone.drone_id;
+                  }
+                } catch (e) {}
+              }
+              return trip.drone ? trip.drone.droneId : 'N/A';
+            })()}</p>
             <p><b>Available:</b> {trip.drone ? (trip.drone.available ? "Yes" : "No") : "N/A"}</p>
             <p><b>To:</b> {trip.droneDelivery ? `${trip.droneDelivery.latitude}, ${trip.droneDelivery.longitude}` : 'N/A'}</p>
             <p><b>Payload:</b> {trip.droneDelivery ? trip.droneDelivery.weight : 'N/A'} kg</p>
             <p><b>Distance:</b> {trip.droneDist ? (Number(trip.droneDist) * 1.60934).toFixed(2) + ' km' : 'N/A'}</p>
-            <p><b>Estimated Time:</b> {formatTimeMinutes(droneTime)}</p>
+            <p><b>Estimated Time:</b> {formatTimeMinutes(droneTime)}
+              {(() => {
+                const xgbResult = localStorage.getItem("xgbResult");
+                if (xgbResult && xgbResult !== "undefined") {
+                  try {
+                    const parsedResult = JSON.parse(xgbResult);
+                    if (parsedResult && (parsedResult.predicted_time_minutes || parsedResult.time)) {
+                      return <span style={{ color: "#d32f2f", marginLeft: 8 }}>🧠 ML</span>;
+                    }
+                  } catch (e) {}
+                }
+                return null;
+              })()}
+            </p>
           </div>
         </div>
         {trip.truckDeliveries && trip.truckDeliveries.length > 0 && (

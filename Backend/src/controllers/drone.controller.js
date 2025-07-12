@@ -2,6 +2,12 @@ import { Drone } from "../models/drone.models.js";
 import ApiError from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/AsyncHandler.js";
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const createDrone = asyncHandler(async ( req ,res) => {
     const {droneId,currentBattery, batteryCapacity, payload, available} = req.body;
@@ -20,6 +26,24 @@ const createDrone = asyncHandler(async ( req ,res) => {
         payload,
         available: available !== undefined ? available : true
     });
+
+    // Update ML_Model/drones_list.json
+    try {
+        const dronesListPath = path.join(__dirname, '../../../ML_Model/drones_list.json');
+        let dronesList = [];
+        if (fs.existsSync(dronesListPath)) {
+            dronesList = JSON.parse(fs.readFileSync(dronesListPath, 'utf-8'));
+        }
+        dronesList.push({
+            drone_id: droneId,
+            payload_capacity: Number(payload),
+            battery_capacity: Number(batteryCapacity),
+            battery_percent: Number(currentBattery)
+        });
+        fs.writeFileSync(dronesListPath, JSON.stringify(dronesList, null, 2));
+    } catch (err) {
+        console.error('Failed to update drones_list.json:', err);
+    }
 
     if(!drone) {
         throw new ApiError(500, "Failed to create drone.");
@@ -104,7 +128,24 @@ const deleteDrone = asyncHandler(async (req, res) => {
   res.status(200).json(new ApiResponse(200, null, "Drone deleted successfully"));
 });
 
-
+// Sync all drones from DB to ML_Model/drones_list.json
+const syncDronesList = asyncHandler(async (req, res) => {
+    try {
+        const drones = await Drone.find();
+        const dronesList = drones.map(d => ({
+            drone_id: d.droneId,
+            payload_capacity: Number(d.payload),
+            battery_capacity: Number(d.batteryCapacity),
+            battery_percent: Number(d.currentBattery)
+        }));
+        const dronesListPath = path.join(__dirname, '../../../ML_Model/drones_list.json');
+        fs.writeFileSync(dronesListPath, JSON.stringify(dronesList, null, 2));
+        res.status(200).json({ message: 'Drones list synced successfully!', count: dronesList.length });
+    } catch (err) {
+        console.error('Failed to sync drones_list.json:', err);
+        res.status(500).json({ error: 'Failed to sync drones_list.json' });
+    }
+});
 
 
 export {
@@ -112,5 +153,6 @@ export {
     getAllDrones,
     toggleDroneAvailablity,
     editDrone,
-    deleteDrone
-}
+    deleteDrone,
+    syncDronesList
+};
