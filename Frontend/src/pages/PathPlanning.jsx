@@ -175,17 +175,39 @@ export default function PathPlanning() {
   const [windSpeed, setWindSpeed] = useState(null);
   const [windLoading, setWindLoading] = useState(false);
   const [windError, setWindError] = useState(null);
+  const [xgbResult, setXgbResult] = useState(null);
 
   const navigate = useNavigate();
 
   useEffect(() => {
   const storedTrip = localStorage.getItem("latestTrip");
   if (storedTrip) {
-    setTrip(JSON.parse(storedTrip));
+    const parsedTrip = JSON.parse(storedTrip);
+    console.log("Loaded trip from localStorage:", parsedTrip);
+    setTrip(parsedTrip);
   } else {
+      console.log("No trip found in localStorage, redirecting to newtrip");
       navigate("/newtrip");
   }
 }, []);
+
+  useEffect(() => {
+    const result = localStorage.getItem("xgbResult");
+    console.log("Raw xgbResult from localStorage:", result);
+    if (result && result !== "undefined") {
+      try {
+        const parsedResult = JSON.parse(result);
+        console.log("Parsed xgbResult:", parsedResult);
+        setXgbResult(parsedResult);
+      } catch (e) {
+        console.error("Failed to parse xgbResult:", e);
+        setXgbResult(null);
+      }
+    } else {
+      console.log("No xgbResult found in localStorage");
+      setXgbResult(null);
+    }
+  }, []);
 
   let droneDelivery = null;
   let truckDeliveries = [];
@@ -309,6 +331,17 @@ export default function PathPlanning() {
     const [latA, lngA] = ptA;
     const [latB, lngB] = ptB;
     const dist = haversineDistance(latA, lngA, latB, lngB);
+    
+    // If this is a drone segment (Launch to DroneDelivery or DroneDelivery to Landing), use ML prediction
+    if ((typeA === "Launch" && typeB === "DroneDelivery") || 
+        (typeA === "DroneDelivery" && typeB === "Landing")) {
+      // Use ML predicted time if available, otherwise fallback to calculated time
+      if (xgbResult && xgbResult.predicted_time_minutes) {
+        return Number(xgbResult.predicted_time_minutes);
+      }
+      return (dist / 40) * 60; // fallback to calculated time
+    }
+    
     // If either point is Launch, DroneDelivery, or Landing, use drone speed (40 km/h)
     if (["Launch", "DroneDelivery", "Landing"].includes(typeA) || ["Launch", "DroneDelivery", "Landing"].includes(typeB)) {
       return (dist / 40) * 60; // minutes
@@ -336,6 +369,9 @@ export default function PathPlanning() {
           const data = await res.json();
           const wind = data.wind && data.wind.speed ? data.wind.speed : null;
           setWindSpeed(wind);
+          if (wind !== null && !isNaN(wind)) {
+            localStorage.setItem('windSpeed', wind);
+          }
         } catch (err) {
           setWindError('Failed to fetch wind speed');
         } finally {
@@ -359,7 +395,9 @@ export default function PathPlanning() {
     launchPoint[0], launchPoint[1],
     droneDelivery.latitude, droneDelivery.longitude
   );
-  const droneTripTime = (2 * droneLeg / 40) * 60; // 40 km/h
+  
+  // Use ML predicted time if available, otherwise calculate based on distance
+  const droneTripTime = xgbResult && xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes) : (2 * droneLeg / 40) * 60;
 
   const totalTripTime = truckTimeToLaunch + Math.max(droneTripTime, truckTimeAfter);
 
@@ -443,11 +481,14 @@ export default function PathPlanning() {
           marginBottom: 18,
           boxShadow: "0 2px 8px #0001"
         }}>
-          <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 4}}>Estimated Time</div>
+          <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 4}}>
+            Estimated Time
+            {xgbResult && xgbResult.time && <span style={{ fontSize: 14, marginLeft: 8, color: "#d32f2f" }}>🧠 ML Enhanced</span>}
+          </div>
           <div style={{
             fontSize: "2em",
             fontWeight: 700,
-            color: "#1976d2"
+            color: xgbResult && xgbResult.time ? "#d32f2f" : "#1976d2"
           }}>{formatTimeMinutes(totalTripTime)}</div>
         </div>
         
@@ -473,6 +514,17 @@ export default function PathPlanning() {
           <div style={{background: "#ffeaea", borderRadius: 12, padding: "16px 20px", marginBottom: 18, border: "2px solid #e57373"}}>
             <div style={{fontWeight: 600, color: "#d32f2f"}}>No ML Prediction</div>
             <div style={{color: "#888"}}>Fallback logic was used for drone delivery selection.</div>
+          </div>
+        )}
+        {xgbResult && (
+          <div style={{ background: "#e3f2fd", borderRadius: 12, padding: "16px 20px", marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: "1.1em", marginBottom: 4, color: "#1976d2" }}>
+              🧠 Model Prediction
+            </div>
+            <div style={{ fontSize: "1em", color: "#333" }}>
+              <b>Drone ID:</b> {xgbResult.drone && xgbResult.drone.drone_id ? xgbResult.drone.drone_id : (xgbResult.droneId || 'N/A')} <br />
+              <b>Predicted Time:</b> {xgbResult.predicted_time_minutes ? Number(xgbResult.predicted_time_minutes).toFixed(2) : (xgbResult.time ? Number(xgbResult.time).toFixed(2) : 'N/A')} min
+            </div>
           </div>
         )}
         <div style={{
@@ -529,7 +581,15 @@ export default function PathPlanning() {
                           traversalPoints[idx].type,
                           traversalPoints[idx + 1].type
                         );
-                        return isNaN(t) ? "" : `${Math.round(t)} min`;
+                        const isDroneSegment = (traversalPoints[idx].type === "Launch" && traversalPoints[idx + 1].type === "DroneDelivery") ||
+                                             (traversalPoints[idx].type === "DroneDelivery" && traversalPoints[idx + 1].type === "Landing");
+                        const isMLPrediction = isDroneSegment && xgbResult && xgbResult.predicted_time_minutes;
+                        return isNaN(t) ? "" : (
+                          <span style={{ color: isMLPrediction ? "#d32f2f" : "#1976d2" }}>
+                            {Math.round(t)} min
+                            {isMLPrediction && <span style={{ fontSize: 10, marginLeft: 4 }}>🧠</span>}
+                          </span>
+                        );
                       })()}
                     </span>
                   </div>
@@ -577,9 +637,7 @@ export default function PathPlanning() {
             </tbody>
           </table>
             </div>
-        <div style={{marginTop: 16, fontSize: "1.1em"}}>
-          <b>Drone ID Used:</b> <span style={{color: "#d32f2f"}}>{drone ? drone.droneId : "N/A"}</span>
-        </div>
+     
         <div style={{marginTop: 8}}>
           <b>Wind Speed (drone route):</b>
           {windLoading && <span style={{color: '#888'}}> Loading...</span>}
@@ -723,17 +781,70 @@ export default function PathPlanning() {
             <Polyline positions={polyline} color="#1976d2" weight={6} opacity={0.8} />
           )}
           {launchPoint && (
-            <Polyline
-              positions={[
-                launchPoint,
-                [droneDelivery.latitude, droneDelivery.longitude],
-                landingPoint
-              ]}
-              color="#d32f2f"
-              weight={4}
-              opacity={0.9}
-              dashArray="12, 10"
-            />
+            <>
+              <Polyline
+                positions={[
+                  launchPoint,
+                  [droneDelivery.latitude, droneDelivery.longitude],
+                  landingPoint
+                ]}
+                color="#d32f2f"
+                weight={4}
+                opacity={0.9}
+                dashArray="12, 10"
+              />
+              
+              {/* Time annotations for drone route */}
+              {xgbResult && xgbResult.predicted_time_minutes && (
+                <>
+                  {/* Launch to Delivery time annotation */}
+                  <Marker
+                    position={[
+                      (launchPoint[0] + droneDelivery.latitude) / 2,
+                      (launchPoint[1] + droneDelivery.longitude) / 2
+                    ]}
+                    icon={L.divIcon({
+                      html: `<div style="
+                        background: #d32f2f;
+                        color: white;
+                        padding: 4px 8px;
+                        border-radius: 12px;
+                        font-size: 11px;
+                        font-weight: bold;
+                        border: 2px solid white;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                        white-space: nowrap;
+                      ">${(Number(xgbResult.predicted_time_minutes) / 2).toFixed(0)} min</div>`,
+                      iconSize: [60, 20],
+                      className: ""
+                    })}
+                  />
+                  
+                  {/* Delivery to Landing time annotation */}
+                  <Marker
+                    position={[
+                      (droneDelivery.latitude + landingPoint[0]) / 2,
+                      (droneDelivery.longitude + landingPoint[1]) / 2
+                    ]}
+                    icon={L.divIcon({
+                      html: `<div style="
+                        background: #d32f2f;
+                        color: white;
+                        padding: 4px 8px;
+                        border-radius: 12px;
+                        font-size: 11px;
+                        font-weight: bold;
+                        border: 2px solid white;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                        white-space: nowrap;
+                      ">${(Number(xgbResult.predicted_time_minutes) / 2).toFixed(0)} min</div>`,
+                      iconSize: [60, 20],
+                      className: ""
+                    })}
+                  />
+                </>
+              )}
+            </>
           )}
         </MapContainer>
       </div>

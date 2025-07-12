@@ -3,6 +3,7 @@ import pandas as pd
 import joblib
 import json
 import sys
+import os
 from typing import Dict, Any, List
 from dataclasses import dataclass
 
@@ -15,10 +16,16 @@ class Drone:
 
 def load_model_and_features() -> tuple:
     try:
-        model = joblib.load('time_prediction_model.pkl')
+        # Get the directory where this script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        model_path = os.path.join(script_dir, 'time_prediction_model.pkl')
+        feature_names_path = os.path.join(script_dir, 'feature_names.pkl')
+        
+        model = joblib.load(model_path)
         print("Model loaded successfully")
         
-        feature_names = joblib.load('feature_names.pkl')
+        feature_names = joblib.load(feature_names_path)
         print("Feature names loaded successfully")
         
         return model, feature_names
@@ -73,7 +80,11 @@ def load_input_from_json(filename: str) -> Dict[str, float]:
 
 def load_drones_list() -> List[Drone]:
     try:
-        with open('drones_list.json', 'r') as file:
+        # Get the directory where this script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        drones_list_path = os.path.join(script_dir, 'drones_list.json')
+        
+        with open(drones_list_path, 'r') as file:
             drones_data = json.load(file)
         
         if not isinstance(drones_data, list):
@@ -176,16 +187,27 @@ def display_results(input_features: Dict[str, float], predicted_time: float, sel
     print("\n" + "="*50)
 
 def output_json(input_features, predicted_time, selected_drone):
+    # Convert numpy types to Python native types for JSON serialization
+    def convert_numpy_types(obj):
+        if hasattr(obj, 'item'):  # numpy scalar
+            return obj.item()
+        elif isinstance(obj, dict):
+            return {k: convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_numpy_types(v) for v in obj]
+        else:
+            return obj
+    
     result = {
-        "predicted_time_seconds": predicted_time,
-        "predicted_time_minutes": predicted_time / 60,
+        "predicted_time_seconds": convert_numpy_types(predicted_time),
+        "predicted_time_minutes": convert_numpy_types(predicted_time / 60),
         "drone": {
             "drone_id": selected_drone.drone_id,
             "payload_capacity": selected_drone.payload_capacity,
             "battery_capacity": selected_drone.battery_capacity,
             "battery_percent": selected_drone.battery_percent
         },
-        "input_features": input_features
+        "input_features": convert_numpy_types(input_features)
     }
     print(json.dumps(result))
 

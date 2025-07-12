@@ -1,32 +1,68 @@
 [
   {
-    "drone_id": "DRONE_001",
-    "payload_capacity": 2.5,
+    "drone_id": "1",
+    "payload_capacity": 5,
+    "battery_capacity": 1000,
+    "battery_percent": 50
+  },
+  {
+    "drone_id": "2",
+    "payload_capacity": 5,
+    "battery_capacity": 2000,
+    "battery_percent": 20
+  },
+  {
+    "drone_id": "3",
+    "payload_capacity": 4,
+    "battery_capacity": 3000,
+    "battery_percent": 40
+  },
+  {
+    "drone_id": "4",
+    "payload_capacity": 10,
+    "battery_capacity": 1000,
+    "battery_percent": 60
+  },
+  {
+    "drone_id": "69",
+    "payload_capacity": 5,
+    "battery_capacity": 1000,
+    "battery_percent": 50
+  },
+  {
+    "drone_id": "a",
+    "payload_capacity": 3,
+    "battery_capacity": 1500,
+    "battery_percent": 50
+  },
+  {
+    "drone_id": "b",
+    "payload_capacity": 5,
+    "battery_capacity": 3000,
+    "battery_percent": 80
+  },
+  {
+    "drone_id": "c",
+    "payload_capacity": 8,
     "battery_capacity": 6000,
-    "battery_percent": 85
+    "battery_percent": 10
   },
   {
-    "drone_id": "DRONE_002", 
-    "payload_capacity": 1.8,
-    "battery_capacity": 4500,
-    "battery_percent": 92
+    "drone_id": "20",
+    "payload_capacity": 5,
+    "battery_capacity": 2000,
+    "battery_percent": 69
   },
   {
-    "drone_id": "DRONE_003",
-    "payload_capacity": 1.2,
-    "battery_capacity": 8000,
-    "battery_percent": 42
-  },
-  {
-    "drone_id": "DRONE_004",
-    "payload_capacity": 1.2,
-    "battery_capacity": 3500,
-    "battery_percent": 95
-  },
-  {
-    "drone_id": "DRONE_005",
-    "payload_capacity": 4.0,
+    "drone_id": "23",
+    "payload_capacity": 5,
     "battery_capacity": 10000,
-    "battery_percent": 88
+    "battery_percent": 25
+  },
+  {
+    "drone_id": "143",
+    "payload_capacity": 12,
+    "battery_capacity": 2000,
+    "battery_percent": 78
   }
 ]

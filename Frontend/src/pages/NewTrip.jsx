@@ -201,21 +201,20 @@ export default function NewTrip() {
     }));
     
     try {
-      // Get ML prediction for drone delivery
+      // KMeans call (already present)
       const hq = { latitude: Number(hqLat), longitude: Number(hqLng) };
       const mlResponse = await fetch('/api/ml/predict-drone-delivery', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hq, deliveries })
       });
-      
       if (!mlResponse.ok) {
-        throw new Error('ML prediction failed');
+        const errText = await mlResponse.text();
+        console.error('ML prediction failed:', errText);
       }
-      
       const mlData = await mlResponse.json();
       const predictedDroneIndex = mlData.data.droneIndex;
-      
+
       let trip;
       if (typeof predictedDroneIndex === 'number' && predictedDroneIndex >= 0 && predictedDroneIndex < deliveries.length) {
         trip = optimizeTripWithML(deliveries, hqLat, hqLng, predictedDroneIndex);
@@ -227,13 +226,94 @@ export default function NewTrip() {
       if (trip) {
         localStorage.setItem('latestTrip', JSON.stringify(trip));
         localStorage.removeItem("editTrip");
+
+        // --- XGB INTEGRATION ---
+        // Prepare the payload for XGB with more complete data
+        const droneDelivery = trip.mlPredictedDelivery || trip.droneDelivery;
+        const assignedDrone = trip.drone;
+        
+        // Calculate distance from launch to drone delivery
+        // For now, use HQ as launch (for full integration, use actual launchPoint if available)
+        const hqLatNum = Number(hqLat);
+        const hqLngNum = Number(hqLng);
+        const deliveryLat = Number(droneDelivery?.latitude);
+        const deliveryLng = Number(droneDelivery?.longitude);
+        // Haversine in meters
+        const R = 6371000;
+        const dLat = (deliveryLat - hqLatNum) * Math.PI / 180;
+        const dLng = (deliveryLng - hqLngNum) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(hqLatNum * Math.PI / 180) * Math.cos(deliveryLat * Math.PI / 180) *
+                  Math.sin(dLng/2) * Math.sin(dLng/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const launchToDeliveryDistance = R * c;
+
+        // Use wind speed from localStorage if available
+        let wind_speed = 5; // fallback default
+        const windSpeedLS = localStorage.getItem('windSpeed');
+        if (windSpeedLS && !isNaN(Number(windSpeedLS))) {
+          wind_speed = Number(windSpeedLS);
+        } else {
+          // Fallback: fetch wind speed from OpenWeather API
+          try {
+            const weatherRes = await fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${deliveryLat}&lon=${deliveryLng}&appid=${import.meta.env.VITE_OPENWEATHER_API_KEY}&units=metric`);
+            if (weatherRes.ok) {
+              const weatherData = await weatherRes.json();
+              if (weatherData && weatherData.wind && typeof weatherData.wind.speed === 'number') {
+                wind_speed = weatherData.wind.speed;
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to fetch wind speed, using default:', e);
+          }
+        }
+
+        const xgbPayload = {
+          payload: droneDelivery?.weight,
+          latitude: droneDelivery?.latitude,
+          longitude: droneDelivery?.longitude,
+          droneId: assignedDrone?.droneId,
+          distance: launchToDeliveryDistance,
+          wind_speed: wind_speed,
+          speed: 10,     // Default speed
+          position_z: 100, // Default altitude
+          angular_speed: 0.5 // Default angular speed
+        };
+
+        try {
+          const xgbRes = await fetch("/api/ml/run-xgb", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(xgbPayload)
+          });
+          
+          console.log("XGB Response status:", xgbRes.status);
+          
+          if (!xgbRes.ok) {
+            const errorText = await xgbRes.text();
+            console.error("XGB API error:", xgbRes.status, errorText);
+            localStorage.removeItem("xgbResult");
+          } else {
+            const xgbData = await xgbRes.json();
+            console.log("XGB API success:", xgbData);
+            if (xgbData && xgbData.data) {
+              localStorage.setItem("xgbResult", JSON.stringify(xgbData.data));
+            } else {
+              localStorage.removeItem("xgbResult");
+            }
+          }
+        } catch (e) {
+          console.error("XGB API exception:", e);
+          localStorage.removeItem("xgbResult");
+        }
+        // --- END XGB INTEGRATION ---
+
         nav('/pathplanning');
       } else {
         alert('No feasible drone delivery found. All deliveries assigned to truck.');
       }
     } catch (error) {
       console.error('ML prediction error:', error);
-      // Fallback to original optimization if ML fails
       const trip = optimizeTrip(deliveries, hqLat, hqLng);
       trip.mlPredictedDelivery = null;
       if (trip) {
