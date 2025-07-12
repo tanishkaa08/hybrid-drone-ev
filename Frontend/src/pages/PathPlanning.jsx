@@ -288,52 +288,44 @@ export default function PathPlanning() {
   );
   const landingPoint = launchPoint;
 
-  // Build traversal order based on user-provided deliveries
-  // User trip: [HQ, ...truckDeliveries, HQ]
-  const userTrip = [HQ, ...truckDeliveries, HQ];
-  let launchInsertIdx = 0;
+  // Build traversalPoints so that step letters always match the true traversal order
+  let traversalPoints = [];
+  // Find the closest segment index for launch point
+  let insertIdx = 0;
   let minDist = Infinity;
-  // Find the segment where the launch point is closest
-  for (let i = 0; i < userTrip.length - 1; i++) {
-    const [lat1, lng1] = [userTrip[i].latitude || userTrip[i].lat, userTrip[i].longitude || userTrip[i].lng];
-    const [lat2, lng2] = [userTrip[i+1].latitude || userTrip[i+1].lat, userTrip[i+1].longitude || userTrip[i+1].lng];
+  for (let i = 0; i < optimizedNodeOrder.length - 1; i++) {
+    const [lat1, lng1] = optimizedNodeOrder[i];
+    const [lat2, lng2] = optimizedNodeOrder[i + 1];
     if (!launchPoint || launchPoint[0] == null || launchPoint[1] == null) continue;
-    const dist = haversineDistance(launchPoint[0], launchPoint[1], lat1, lng1) + haversineDistance(launchPoint[0], launchPoint[1], lat2, lng2);
+    // Distance from launchPoint to segment midpoint
+    const midLat = (lat1 + lat2) / 2;
+    const midLng = (lng1 + lng2) / 2;
+    const dist = haversineDistance(launchPoint[0], launchPoint[1], midLat, midLng);
     if (dist < minDist) {
       minDist = dist;
-      launchInsertIdx = i + 1; // insert after i-th delivery
+      insertIdx = i + 1;
     }
   }
-  // Build traversal order array (only user points + hybrid points) - no return to HQ
-  let traversalPoints = [];
-  // HQ
-  if (HQ.lat != null && HQ.lng != null) {
-    traversalPoints.push({ label: getLabel(0), type: "HQ", coords: [HQ.lat, HQ.lng] });
-  }
-  // Truck deliveries up to launchInsertIdx
-  for (let i = 0; i < launchInsertIdx; i++) {
-    if (truckDeliveries[i] && truckDeliveries[i].latitude != null && truckDeliveries[i].longitude != null) {
-      traversalPoints.push({ label: getLabel(i + 1), type: "Truck", coords: [truckDeliveries[i].latitude, truckDeliveries[i].longitude] });
+  // Walk through the route up to insertIdx
+  for (let i = 0; i < insertIdx; i++) {
+    if (i === 0) {
+      traversalPoints.push({ type: "HQ", coords: optimizedNodeOrder[i] });
+    } else {
+      traversalPoints.push({ type: "Truck", coords: optimizedNodeOrder[i] });
     }
   }
-  // Launch
+  // Insert drone segment
   if (launchPoint && launchPoint[0] != null && launchPoint[1] != null) {
-    traversalPoints.push({ label: getLabel(launchInsertIdx + 1), type: "Launch", coords: launchPoint });
+    traversalPoints.push({ type: "Launch", coords: launchPoint });
+    traversalPoints.push({ type: "DroneDelivery", coords: droneDelivery && droneDelivery.latitude != null && droneDelivery.longitude != null ? [droneDelivery.latitude, droneDelivery.longitude] : [null, null] });
+    traversalPoints.push({ type: "Landing", coords: launchPoint });
   }
-  // Drone Delivery
-  if (droneDelivery && droneDelivery.latitude != null && droneDelivery.longitude != null) {
-    traversalPoints.push({ label: getLabel(launchInsertIdx + 2), type: "DroneDelivery", coords: [droneDelivery.latitude, droneDelivery.longitude] });
+  // Continue with the rest of the route
+  for (let i = insertIdx; i < optimizedNodeOrder.length; i++) {
+    traversalPoints.push({ type: "Truck", coords: optimizedNodeOrder[i] });
   }
-  // Landing
-  if (landingPoint && landingPoint[0] != null && landingPoint[1] != null) {
-    traversalPoints.push({ label: getLabel(launchInsertIdx + 3), type: "Landing", coords: landingPoint });
-  }
-  // Remaining truck deliveries after launchInsertIdx
-  for (let i = launchInsertIdx; i < truckDeliveries.length; i++) {
-    if (truckDeliveries[i] && truckDeliveries[i].latitude != null && truckDeliveries[i].longitude != null) {
-      traversalPoints.push({ label: getLabel(launchInsertIdx + 4 + (i - launchInsertIdx)), type: "Truck", coords: [truckDeliveries[i].latitude, truckDeliveries[i].longitude] });
-    }
-  }
+  // Assign step letters strictly in traversal order
+  traversalPoints = traversalPoints.map((pt, idx) => ({ ...pt, label: String.fromCharCode(65 + idx) }));
   // No return to HQ - trip ends at last delivery
   const allPoints = traversalPoints.map(pt => pt.coords);
 
@@ -467,8 +459,8 @@ export default function PathPlanning() {
   hybridTruckDistance += haversineDistance(prevPoint.lat, prevPoint.lng, launchPoint[0], launchPoint[1]);
   
   // Add distance from landing point to next truck delivery (if any)
-  if (launchInsertIdx < truckDeliveries.length) {
-    hybridTruckDistance += haversineDistance(launchPoint[0], launchPoint[1], truckDeliveries[launchInsertIdx].latitude, truckDeliveries[launchInsertIdx].longitude);
+  if (launchIdx < truckDeliveries.length) {
+    hybridTruckDistance += haversineDistance(launchPoint[0], launchPoint[1], truckDeliveries[launchIdx].latitude, truckDeliveries[launchIdx].longitude);
   }
   
   const hybridTruckCarbon = hybridTruckDistance * TRUCK_EMISSION_PER_KM;
@@ -480,6 +472,18 @@ export default function PathPlanning() {
   
   // Carbon emission saved = truck-only - hybrid
   const carbonEmission = truckOnlyCarbon - hybridCarbon;
+
+  // Calculate truck-only total time (all deliveries by truck, in optimized order)
+  let truckOnlyTotalTime = 0;
+  if (optimizedNodeOrder.length > 1) {
+    for (let i = 1; i < optimizedNodeOrder.length; i++) {
+      const [latA, lngA] = optimizedNodeOrder[i - 1];
+      const [latB, lngB] = optimizedNodeOrder[i];
+      const dist = haversineDistance(latA, lngA, latB, lngB);
+      truckOnlyTotalTime += (dist / 30) * 60; // 30 km/h truck speed
+    }
+  }
+  const timeSaved = truckOnlyTotalTime - totalTripTime;
 
   return (
     <div style={{
@@ -539,6 +543,9 @@ export default function PathPlanning() {
             fontWeight: 700,
             color: xgbResult && xgbResult.time ? "#d32f2f" : "#1976d2"
           }}>{formatTimeMinutes(totalTripTime)}</div>
+          <div style={{ fontSize: "1em", color: "#1976d2", marginTop: 6 }}>
+            <b>Time Saved:</b> {timeSaved > 0 ? formatTimeMinutes(timeSaved) : '0 sec'}
+          </div>
         </div>
         
         {mlPredictedDelivery && (
@@ -657,28 +664,20 @@ export default function PathPlanning() {
           <div style={{fontWeight: 600, fontSize: "1.1em", marginBottom: 6}}>Locations</div>
           <table style={{width: "100%", fontSize: "1em", borderCollapse: "collapse"}}>
             <tbody>
-              <tr>
-                <td style={{fontWeight: 500, color: "#1976d2"}}>HQ (A):</td>
-                <td>{HQ.lat}, {HQ.lng}</td>
-              </tr>
-              {optimizedNodeOrder.slice(1, -1).map((coords, idx) => (
-                <tr key={idx}>
-                  <td style={{fontWeight: 500, color: "#388e3c"}}>{getLabel(idx + 1)} (Truck):</td>
-                  <td>{coords[0]}, {coords[1]}</td>
+              {traversalPoints.filter(pt => pt.coords && pt.coords.length === 2).map(pt => (
+                <tr key={pt.label}>
+                  <td style={{
+                    fontWeight: 500,
+                    color:
+                      pt.type === "HQ" ? "#1976d2" :
+                      pt.type === "Truck" ? "#388e3c" :
+                      pt.type === "Launch" ? "#ffa000" :
+                      pt.type === "DroneDelivery" ? "#d32f2f" :
+                      pt.type === "Landing" ? "#7b1fa2" : "#1976d2"
+                  }}>{pt.label} ({pt.type}):</td>
+                  <td>{pt.coords && pt.coords[0] != null && pt.coords[1] != null ? `${pt.coords[0]}, ${pt.coords[1]}` : "N/A"}</td>
                 </tr>
               ))}
-              <tr>
-                <td style={{fontWeight: 500, color: "#ffa000"}}>{getLabel(optimizedNodeOrder.length - 1)} (Launch):</td>
-                <td>{launchPoint ? `${launchPoint[0].toFixed(5)}, ${launchPoint[1].toFixed(5)}` : "N/A"}</td>
-              </tr>
-              <tr>
-                <td style={{fontWeight: 500, color: "#d32f2f"}}>{getLabel(optimizedNodeOrder.length)} (Drone Delivery):</td>
-                <td>{droneDelivery.latitude}, {droneDelivery.longitude}</td>
-              </tr>
-              <tr>
-                <td style={{fontWeight: 500, color: "#7b1fa2"}}>{getLabel(optimizedNodeOrder.length + 1)} (Landing):</td>
-                <td>{landingPoint ? `${landingPoint[0].toFixed(5)}, ${landingPoint[1].toFixed(5)}` : "N/A"}</td>
-              </tr>
             </tbody>
           </table>
             </div>
@@ -723,6 +722,8 @@ export default function PathPlanning() {
       trip.carbonReduction = carbonReduction;
       trip.carbonEmission = carbonEmission;
       trip.totalTripTime = totalTripTime;
+      trip.truckOnlyTotalTime = truckOnlyTotalTime;
+      trip.timeSaved = timeSaved;
       // Save ML-suggested drone id if available
       if (xgbResult && (xgbResult.drone_id || (xgbResult.drone && xgbResult.drone.drone_id))) {
         trip.mlDroneId = xgbResult.drone_id || (xgbResult.drone && xgbResult.drone.drone_id);
@@ -803,33 +804,54 @@ export default function PathPlanning() {
           <ZoomControl position="topright" />
           <ScaleControl position="bottomleft" />
           <FitBounds points={allPoints} />
-          {traversalPoints.map((pt, idx) => (
-            <Marker
-              key={idx}
-              position={pt.coords}
-              icon={
-                pt.type === "HQ" ? hqIcon :
-                pt.type === "Truck" ? truckIcon :
-                pt.type === "Launch" ? launchIcon :
-                pt.type === "Landing" ? landingIcon :
-                pt.type === "DroneDelivery" ? droneIcon : hqIcon
-              }
-            >
-              <Tooltip direction="top" offset={[0, -10]} opacity={1}>
-                <span style={{ fontWeight: "bold", fontSize: 15 }}>{pt.label}</span>
-              </Tooltip>
-              <Popup>
-                <b>{pt.label}</b> - {pt.type}
-                <br />
-                <span style={{ fontSize: 13, color: "#333" }}>
-                  {pt.coords[0].toFixed(5)}, {pt.coords[1].toFixed(5)}
-                </span>
-                {pt.type === "DroneDelivery" && trip.drone && (
-                  <div>Drone ID Used: <b>{trip.drone.droneId}</b></div>
-                )}
-              </Popup>
-            </Marker>
-          ))}
+          {/* Lettered markers for traversal order (A, B, C, ...) - show both step letters if two steps share the same coordinates */}
+          {traversalPoints.map((pt, idx) => {
+            // Find all steps at this coordinate
+            const sameCoordIndices = traversalPoints
+              .map((p, i) => (p.coords[0] === pt.coords[0] && p.coords[1] === pt.coords[1] ? i : null))
+              .filter(i => i !== null);
+            // Only render marker for the first occurrence of this coordinate
+            if (sameCoordIndices[0] !== idx) return null;
+            // Collect all step letters at this coordinate
+            const stepLetters = sameCoordIndices.map(i => String.fromCharCode(65 + i)).join(', ');
+            // Compose marker
+            return (
+              <Marker
+                key={idx}
+                position={pt.coords}
+                icon={L.divIcon({
+                  html: `<div style="
+                    background: ${pt.type === 'HQ' ? '#1976d2' : pt.type === 'Truck' ? '#388e3c' : pt.type === 'Launch' ? '#ffa000' : pt.type === 'DroneDelivery' ? '#d32f2f' : pt.type === 'Landing' ? '#7b1fa2' : '#1976d2'};
+                    color: #fff;
+                    font-weight: bold;
+                    border-radius: 50%;
+                    width: 38px; height: 38px;
+                    display: flex; align-items: center; justify-content: center;
+                    border: 2px solid #fff;
+                    box-shadow: 0 0 4px #0003;
+                    font-size: 16px;">
+                    ${stepLetters}
+                  </div>`,
+                  iconSize: [38, 38],
+                  className: ''
+                })}
+              >
+                <Tooltip direction="top" offset={[0, -10]} opacity={1}>
+                  <span style={{ fontWeight: "bold", fontSize: 15 }}>{stepLetters} - {pt.type}</span>
+                </Tooltip>
+                <Popup>
+                  <b>{pt.label}</b> - {pt.type}
+                  <br />
+                  <span style={{ fontSize: 13, color: "#333" }}>
+                    {pt.coords[0].toFixed(5)}, {pt.coords[1].toFixed(5)}
+                  </span>
+                  {pt.type === "DroneDelivery" && trip.drone && (
+                    <div>Drone ID Used: <b>{trip.drone.droneId}</b></div>
+                  )}
+                </Popup>
+              </Marker>
+            );
+          })}
           {polyline.length > 1 && (
             <Polyline positions={polyline} color="#1976d2" weight={6} opacity={0.8} />
           )}
