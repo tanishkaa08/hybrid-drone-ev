@@ -1,7 +1,7 @@
 
 # 🚀 Hybrid Drone EV Delivery System
 
-A hybrid delivery management platform that uses Electric Vehicles (EVs) and Drones to optimize last-mile delivery routes, reduce carbon emissions, and calculate efficiency in real-time.
+A hybrid delivery management platform that uses Electric Vehicles (EVs) and Drones to optimize last-mile delivery routes, reducing carbon emissions, and calculating efficiency in real-time.
 
 ---
 
